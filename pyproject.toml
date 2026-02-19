@@ -7,7 +7,7 @@ name = "tollbooth-authority"
 version = "0.1.0"
 description = "Tollbooth Authority — Certified Purchase Order Service"
 readme = "README.md"
-license = "MIT"
+license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [{ name = "Lonnie VanZandt" }]
 

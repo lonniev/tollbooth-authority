@@ -121,7 +121,7 @@ Outputs the base64-encoded private key (for `AUTHORITY_SIGNING_KEY` env var) and
 
 ## License
 
-MIT
+Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE) for details.
 
 ---
 
