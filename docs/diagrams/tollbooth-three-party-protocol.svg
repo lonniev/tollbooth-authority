@@ -1,0 +1,225 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 1400" font-family="system-ui, -apple-system, sans-serif" font-size="13">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#334155"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#16a34a"/>
+    </marker>
+    <marker id="arrow-orange" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#ea580c"/>
+    </marker>
+    <marker id="arrow-blue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-purple" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#7c3aed"/>
+    </marker>
+    <marker id="arrow-red" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#e11d48"/>
+    </marker>
+    <marker id="arrow-teal" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#0d9488"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1400" height="1400" fill="#fafafa" rx="8"/>
+
+  <!-- Title -->
+  <text x="700" y="35" text-anchor="middle" font-size="20" font-weight="bold" fill="#0f172a">Tollbooth Three-Party Protocol</text>
+  <text x="700" y="55" text-anchor="middle" font-size="12" fill="#64748b">Authority certification + Operator monetization + User micropayments over Lightning</text>
+
+  <!-- Swim lane headers -->
+  <g font-size="11" font-weight="bold" text-anchor="middle">
+    <rect x="30" y="70" width="110" height="40" rx="6" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+    <text x="85" y="86" fill="#1e40af">End User</text>
+    <text x="85" y="99" font-size="9" font-weight="normal" fill="#1e40af">(Claude / Agent)</text>
+
+    <rect x="190" y="70" width="110" height="40" rx="6" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+    <text x="245" y="93" fill="#92400e">Horizon</text>
+
+    <rect x="360" y="70" width="130" height="40" rx="6" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+    <text x="425" y="86" fill="#166534">Operator MCP</text>
+    <text x="425" y="99" font-size="9" font-weight="normal" fill="#166534">(tollbooth-dpyc)</text>
+
+    <rect x="555" y="70" width="140" height="40" rx="6" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.5"/>
+    <text x="625" y="86" fill="#115e59">Tollbooth</text>
+    <text x="625" y="99" font-size="9" font-weight="normal" fill="#115e59">Authority</text>
+
+    <rect x="760" y="70" width="130" height="40" rx="6" fill="#fae8ff" stroke="#7c3aed" stroke-width="1.5"/>
+    <text x="825" y="86" fill="#581c87">Operator</text>
+    <text x="825" y="99" font-size="9" font-weight="normal" fill="#581c87">BTCPay</text>
+
+    <rect x="960" y="70" width="130" height="40" rx="6" fill="#fff1f2" stroke="#e11d48" stroke-width="1.5"/>
+    <text x="1025" y="86" fill="#9f1239">Authority</text>
+    <text x="1025" y="99" font-size="9" font-weight="normal" fill="#9f1239">BTCPay</text>
+  </g>
+
+  <!-- Vertical lifelines -->
+  <g stroke="#cbd5e1" stroke-width="1" stroke-dasharray="6,4">
+    <line x1="85" y1="115" x2="85" y2="1200"/>
+    <line x1="245" y1="115" x2="245" y2="1200"/>
+    <line x1="425" y1="115" x2="425" y2="1200"/>
+    <line x1="625" y1="115" x2="625" y2="1200"/>
+    <line x1="825" y1="115" x2="825" y2="1200"/>
+    <line x1="1025" y1="115" x2="1025" y2="1200"/>
+  </g>
+
+  <!-- Ownership boundary zones -->
+  <rect x="1110" y="125" width="270" height="170" rx="6" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="1125" y="145" font-size="12" font-weight="bold" fill="#334155">Ownership Zones</text>
+  <rect x="1125" y="155" width="12" height="12" rx="2" fill="#dbeafe" stroke="#2563eb" stroke-width="1"/>
+  <text x="1145" y="166" font-size="10" fill="#334155">User: wallet, agent, identity</text>
+  <rect x="1125" y="175" width="12" height="12" rx="2" fill="#dcfce7" stroke="#16a34a" stroke-width="1"/>
+  <text x="1145" y="186" font-size="10" fill="#334155">Operator: MCP server, BTCPay, tools</text>
+  <rect x="1125" y="195" width="12" height="12" rx="2" fill="#ccfbf1" stroke="#0d9488" stroke-width="1"/>
+  <text x="1145" y="206" font-size="10" fill="#334155">Authority: tax ledger, signing key</text>
+  <rect x="1125" y="215" width="12" height="12" rx="2" fill="#fef3c7" stroke="#d97706" stroke-width="1"/>
+  <text x="1145" y="226" font-size="10" fill="#334155">Horizon: OAuth, identity federation</text>
+  <rect x="1125" y="240" width="240" height="40" rx="3" fill="#f0fdf4" stroke="#16a34a" stroke-width="1"/>
+  <text x="1245" y="255" text-anchor="middle" font-size="9" fill="#166534">Each party runs their own BTCPay Server</text>
+  <text x="1245" y="268" text-anchor="middle" font-size="9" fill="#166534">No shared custody. Self-sovereign settlement.</text>
+
+  <!-- ═══ Phase 1: OAuth Authentication ═══ -->
+  <rect x="20" y="125" width="1080" height="110" rx="4" fill="#eff6ff" fill-opacity="0.5" stroke="#bfdbfe" stroke-width="1"/>
+  <text x="35" y="145" font-size="13" font-weight="bold" fill="#1e40af">Phase 1: OAuth Authentication</text>
+
+  <line x1="90" y1="165" x2="237" y2="165" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+  <text x="163" y="160" text-anchor="middle" font-size="11" fill="#2563eb">MCP connect request</text>
+
+  <line x1="240" y1="188" x2="93" y2="188" stroke="#d97706" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow-orange)"/>
+  <text x="163" y="183" text-anchor="middle" font-size="11" fill="#d97706">OAuth consent + Bearer token</text>
+
+  <line x1="90" y1="211" x2="417" y2="211" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+  <text x="253" y="206" text-anchor="middle" font-size="11" fill="#2563eb">Tool calls carry Bearer token via Horizon</text>
+
+  <!-- ═══ Phase 2: Operator Tax Pre-funding ═══ -->
+  <rect x="20" y="245" width="1080" height="145" rx="4" fill="#ccfbf1" fill-opacity="0.3" stroke="#99f6e4" stroke-width="1"/>
+  <text x="35" y="265" font-size="13" font-weight="bold" fill="#115e59">Phase 2: Operator Tax Pre-funding</text>
+  <text x="310" y="265" font-size="10" fill="#64748b">Operator buys tax credits on Authority (one-time or periodic)</text>
+
+  <line x1="430" y1="285" x2="617" y2="285" stroke="#0d9488" stroke-width="1.5" marker-end="url(#arrow-teal)"/>
+  <text x="523" y="280" text-anchor="middle" font-size="11" fill="#0d9488">purchase_tax_credits(1000 sats)</text>
+
+  <line x1="630" y1="305" x2="1017" y2="305" stroke="#e11d48" stroke-width="1.5" marker-end="url(#arrow-red)"/>
+  <text x="823" y="300" text-anchor="middle" font-size="11" fill="#e11d48">POST /invoices (Lightning invoice)</text>
+
+  <line x1="1020" y1="325" x2="633" y2="325" stroke="#e11d48" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow-red)"/>
+  <text x="823" y="320" text-anchor="middle" font-size="11" fill="#e11d48">checkout_link → operator pays via Lightning</text>
+
+  <line x1="620" y1="348" x2="433" y2="348" stroke="#0d9488" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow-teal)"/>
+  <text x="523" y="343" text-anchor="middle" font-size="11" fill="#0d9488">tax_balance: 1000 sats available</text>
+
+  <rect x="570" y="360" width="110" height="18" rx="3" fill="#ccfbf1" stroke="#0d9488" stroke-width="1"/>
+  <text x="625" y="372" text-anchor="middle" font-size="9" fill="#115e59">Authority ledger credited</text>
+
+  <!-- ═══ Phase 3: Balance Gate ═══ -->
+  <rect x="20" y="398" width="1080" height="62" rx="4" fill="#fffbeb" fill-opacity="0.6" stroke="#fbbf24" stroke-width="1"/>
+  <text x="35" y="418" font-size="13" font-weight="bold" fill="#92400e">Phase 3: Balance Gate</text>
+  <text x="200" y="418" font-size="10" fill="#64748b">User tool call triggers credit purchase</text>
+
+  <line x1="90" y1="436" x2="417" y2="436" stroke="#ea580c" stroke-width="1.5" marker-end="url(#arrow-orange)"/>
+  <text x="253" y="431" text-anchor="middle" font-size="11" fill="#ea580c">search_thoughts("quantum")</text>
+
+  <line x1="420" y1="453" x2="93" y2="453" stroke="#ea580c" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow-orange)"/>
+  <text x="253" y="448" text-anchor="middle" font-size="11" fill="#ea580c">Insufficient balance — use purchase_credits</text>
+
+  <!-- ═══ Phase 4: Certified Purchase Order ═══ -->
+  <rect x="20" y="468" width="1080" height="200" rx="4" fill="#f0fdfa" fill-opacity="0.5" stroke="#99f6e4" stroke-width="1"/>
+  <text x="35" y="488" font-size="13" font-weight="bold" fill="#115e59">Phase 4: Certified Purchase Order</text>
+  <text x="305" y="488" font-size="10" fill="#64748b">Authority deducts tax, returns EdDSA-signed JWT</text>
+
+  <line x1="90" y1="508" x2="417" y2="508" stroke="#7c3aed" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+  <text x="253" y="503" text-anchor="middle" font-size="11" fill="#7c3aed">purchase_credits(1000 sats)</text>
+
+  <line x1="430" y1="530" x2="617" y2="530" stroke="#0d9488" stroke-width="1.5" marker-end="url(#arrow-teal)"/>
+  <text x="523" y="525" text-anchor="middle" font-size="11" fill="#0d9488">certify_purchase(operator, 1000 sats)</text>
+
+  <rect x="570" y="540" width="110" height="18" rx="3" fill="#ccfbf1" stroke="#0d9488" stroke-width="1"/>
+  <text x="625" y="552" text-anchor="middle" font-size="9" fill="#115e59">deduct 2% tax (20 sats)</text>
+
+  <line x1="620" y1="572" x2="433" y2="572" stroke="#0d9488" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow-teal)"/>
+  <text x="523" y="567" text-anchor="middle" font-size="11" fill="#0d9488">EdDSA JWT (amount, operator, nonce, exp)</text>
+
+  <rect x="375" y="582" width="100" height="18" rx="3" fill="#dcfce7" stroke="#16a34a" stroke-width="1"/>
+  <text x="425" y="594" text-anchor="middle" font-size="9" fill="#166534">verify Ed25519 sig</text>
+
+  <line x1="430" y1="610" x2="817" y2="610" stroke="#7c3aed" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+  <text x="623" y="605" text-anchor="middle" font-size="11" fill="#7c3aed">POST /invoices (1000 SATS) — JWT-gated</text>
+
+  <line x1="820" y1="630" x2="433" y2="630" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow-purple)"/>
+  <text x="623" y="625" text-anchor="middle" font-size="11" fill="#7c3aed">invoice_id + checkoutLink</text>
+
+  <line x1="420" y1="650" x2="93" y2="650" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow-purple)"/>
+  <text x="253" y="645" text-anchor="middle" font-size="11" fill="#7c3aed">invoice_id + checkout_link + expiry</text>
+
+  <!-- ═══ Phase 5: Credit Purchase via Lightning ═══ -->
+  <rect x="20" y="678" width="1080" height="175" rx="4" fill="#faf5ff" fill-opacity="0.5" stroke="#e9d5ff" stroke-width="1"/>
+  <text x="35" y="698" font-size="13" font-weight="bold" fill="#581c87">Phase 5: Credit Purchase via Lightning</text>
+  <text x="345" y="698" font-size="10" fill="#64748b">User pays operator's self-hosted BTCPay</text>
+
+  <!-- User pays via Lightning wallet — out-of-band -->
+  <rect x="30" y="712" width="200" height="36" rx="5" fill="#fae8ff" stroke="#7c3aed" stroke-width="1.2"/>
+  <text x="130" y="727" text-anchor="middle" font-size="10" font-weight="bold" fill="#581c87">User opens Lightning wallet</text>
+  <text x="130" y="740" text-anchor="middle" font-size="9" fill="#7c3aed">(WoS, Phoenix, Zeus) — pays invoice</text>
+
+  <line x1="90" y1="762" x2="417" y2="762" stroke="#7c3aed" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+  <text x="253" y="757" text-anchor="middle" font-size="11" fill="#7c3aed">check_payment(invoice_id)</text>
+
+  <line x1="430" y1="782" x2="817" y2="782" stroke="#7c3aed" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+  <text x="623" y="777" text-anchor="middle" font-size="11" fill="#7c3aed">GET /invoices/{id} → status: Settled</text>
+
+  <line x1="820" y1="802" x2="433" y2="802" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow-purple)"/>
+  <text x="623" y="797" text-anchor="middle" font-size="11" fill="#7c3aed">Settled — 1000 sats received</text>
+
+  <rect x="375" y="812" width="100" height="18" rx="3" fill="#dcfce7" stroke="#16a34a" stroke-width="1"/>
+  <text x="425" y="824" text-anchor="middle" font-size="9" fill="#166534">credit user ledger</text>
+
+  <line x1="420" y1="842" x2="93" y2="842" stroke="#16a34a" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow-green)"/>
+  <text x="253" y="837" text-anchor="middle" font-size="11" fill="#16a34a">+1,000 credits granted (balance: 1,000)</text>
+
+  <!-- ═══ Phase 6: Monetized Tool Execution ═══ -->
+  <rect x="20" y="863" width="1080" height="140" rx="4" fill="#fff7ed" fill-opacity="0.5" stroke="#fed7aa" stroke-width="1"/>
+  <text x="35" y="883" font-size="13" font-weight="bold" fill="#9a3412">Phase 6: Monetized Tool Execution</text>
+
+  <line x1="90" y1="903" x2="417" y2="903" stroke="#ea580c" stroke-width="1.5" marker-end="url(#arrow-orange)"/>
+  <text x="253" y="898" text-anchor="middle" font-size="11" fill="#ea580c">brain_query("MATCH (p:Person) RETURN p")</text>
+
+  <rect x="380" y="913" width="90" height="28" rx="3" fill="#fff7ed" stroke="#ea580c" stroke-width="1"/>
+  <text x="425" y="925" text-anchor="middle" font-size="10" fill="#9a3412">balance >= 10?</text>
+  <text x="425" y="937" text-anchor="middle" font-size="10" fill="#16a34a" font-weight="bold">debit 10 sats</text>
+
+  <line x1="430" y1="950" x2="417" y2="950" stroke="#334155" stroke-width="0"/>
+  <!-- Operator MCP executes tool (internal) -->
+  <rect x="380" y="948" width="90" height="16" rx="3" fill="#dcfce7" stroke="#16a34a" stroke-width="1"/>
+  <text x="425" y="959" text-anchor="middle" font-size="9" fill="#166534">execute tool</text>
+
+  <line x1="420" y1="978" x2="93" y2="978" stroke="#16a34a" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow-green)"/>
+  <text x="253" y="973" text-anchor="middle" font-size="11" fill="#16a34a">results (balance: 990 sats)</text>
+
+  <!-- Legend -->
+  <rect x="20" y="1020" width="1080" height="175" rx="4" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="40" y="1042" font-size="12" font-weight="bold" fill="#334155">Key Principles</text>
+
+  <circle cx="45" cy="1062" r="4" fill="#2563eb"/>
+  <text x="58" y="1066" font-size="11" fill="#334155">OAuth identity preserved throughout — every request carries Bearer token via Horizon</text>
+
+  <circle cx="45" cy="1082" r="4" fill="#0d9488"/>
+  <text x="58" y="1086" font-size="11" fill="#334155">Ed25519 signed JWTs — Authority certifies every purchase order; operator verifies with hardcoded public key</text>
+
+  <circle cx="45" cy="1102" r="4" fill="#7c3aed"/>
+  <text x="58" y="1106" font-size="11" fill="#334155">Don't Pester Your Customer (DPYC) — pre-fund credits in one step, drive the turnpike without per-request friction</text>
+
+  <circle cx="45" cy="1122" r="4" fill="#16a34a"/>
+  <text x="58" y="1126" font-size="11" fill="#334155">Self-sovereign: each party runs their own BTCPay Server + Lightning Node — zero KYC, instant settlement</text>
+
+  <circle cx="45" cy="1142" r="4" fill="#ea580c"/>
+  <text x="58" y="1146" font-size="11" fill="#334155">All amounts in satoshis — integer arithmetic only, no USD peg, no floats in the credit path</text>
+
+  <circle cx="45" cy="1162" r="4" fill="#e11d48"/>
+  <text x="58" y="1166" font-size="11" fill="#334155">Tax is pre-funded, not pass-through — operator bears the cost, never the end user</text>
+
+  <!-- Three-repo attribution -->
+  <text x="700" y="1215" text-anchor="middle" font-size="11" fill="#94a3b8">tollbooth-authority (this repo) · tollbooth-dpyc (pip install tollbooth-dpyc) · thebrain-mcp (reference integration)</text>
+</svg>

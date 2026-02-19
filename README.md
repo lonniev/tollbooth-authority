@@ -23,6 +23,18 @@ A [FastMCP](https://fastmcp.cloud) service deployed on Horizon that enforces tax
 | `certify_purchase` | Deduct tax, return signed JWT certificate |
 | `refresh_config` | Hot-reload env vars without redeploy |
 
+## Architecture
+
+The Tollbooth ecosystem is a three-party protocol spanning three repositories:
+
+| Repo | Role |
+|------|------|
+| **tollbooth-authority** (this repo) | Tax certification service — EdDSA-signed JWTs, Authority BTCPay |
+| [tollbooth-dpyc](https://github.com/lonniev/tollbooth-dpyc) | Operator-side library — credit ledger, BTCPay client, tool gating |
+| [thebrain-mcp](https://github.com/lonniev/thebrain-mcp) | Reference integration — first MCP server powered by Tollbooth |
+
+![Three-Party Protocol](docs/diagrams/tollbooth-three-party-protocol.svg)
+
 ## Development
 
 ```bash
