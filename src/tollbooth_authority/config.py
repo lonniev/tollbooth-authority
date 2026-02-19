@@ -21,6 +21,10 @@ class AuthoritySettings(BaseSettings):
     thebrain_vault_brain_id: str = ""
     thebrain_vault_home_id: str = ""
 
+    # Tier config (VIP multipliers for operator tax balances)
+    btcpay_tier_config: str | None = None
+    btcpay_user_tiers: str | None = None
+
     # Tax parameters
     tax_rate_percent: float = 2.0
     tax_min_sats: int = 10

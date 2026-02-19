@@ -21,7 +21,7 @@ from tollbooth import BTCPayClient, BTCPayError, LedgerCache
 from tollbooth.tools.credits import (
     check_balance_tool,
     check_payment_tool,
-    purchase_credits_tool,
+    purchase_tax_credits_tool,
 )
 
 from tollbooth_authority.certificate import create_certificate_claims
@@ -321,8 +321,13 @@ async def purchase_tax_credits(
     user_id = _require_user_id()
     btcpay = _get_btcpay()
     cache = _get_ledger_cache()
+    s = _get_settings()
 
-    return await purchase_credits_tool(btcpay, cache, user_id, amount_sats)
+    return await purchase_tax_credits_tool(
+        btcpay, cache, user_id, amount_sats,
+        tier_config_json=s.btcpay_tier_config,
+        user_tiers_json=s.btcpay_user_tiers,
+    )
 
 
 @mcp.tool()
@@ -357,8 +362,13 @@ async def check_tax_payment(
     user_id = _require_user_id()
     btcpay = _get_btcpay()
     cache = _get_ledger_cache()
+    s = _get_settings()
 
-    return await check_payment_tool(btcpay, cache, user_id, invoice_id)
+    return await check_payment_tool(
+        btcpay, cache, user_id, invoice_id,
+        tier_config_json=s.btcpay_tier_config,
+        user_tiers_json=s.btcpay_user_tiers,
+    )
 
 
 @mcp.tool()
@@ -378,8 +388,13 @@ async def tax_balance() -> dict[str, Any]:
     """
     user_id = _require_user_id()
     cache = _get_ledger_cache()
+    s = _get_settings()
 
-    return await check_balance_tool(cache, user_id)
+    return await check_balance_tool(
+        cache, user_id,
+        tier_config_json=s.btcpay_tier_config,
+        user_tiers_json=s.btcpay_user_tiers,
+    )
 
 
 @mcp.tool()
