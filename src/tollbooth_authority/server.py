@@ -207,6 +207,7 @@ def _require_user_id() -> str:
 # ---------------------------------------------------------------------------
 
 _shutdown_triggered = False
+_reconciled_users: set[str] = set()
 
 
 async def _graceful_shutdown() -> None:
@@ -218,11 +219,12 @@ async def _graceful_shutdown() -> None:
     if _ledger_cache is not None:
         dirty = _ledger_cache.dirty_count
         logger.info("Graceful shutdown: flushing %d dirty entries...", dirty)
-        ts = datetime.now(timezone.utc).isoformat()
-        await _ledger_cache.snapshot_all(ts)
-        flushed = await _ledger_cache.flush_all()
-        await _ledger_cache.stop()
-        logger.info("Shutdown: flushed %d entries.", flushed)
+        try:
+            await asyncio.wait_for(
+                _shutdown_flush_and_stop(), timeout=8.0
+            )
+        except asyncio.TimeoutError:
+            logger.error("Graceful shutdown timed out after 8s — some entries may be lost.")
         _ledger_cache = None
 
     if _btcpay_client is not None:
@@ -232,6 +234,14 @@ async def _graceful_shutdown() -> None:
     if _vault is not None:
         await _vault.close()
         _vault = None
+
+
+async def _shutdown_flush_and_stop() -> None:
+    """Flush and stop the ledger cache (extracted for wait_for wrapping)."""
+    assert _ledger_cache is not None
+    flushed = await _ledger_cache.flush_all()
+    await _ledger_cache.stop()
+    logger.info("Shutdown: flushed %d entries.", flushed)
 
 
 def _register_shutdown_handlers() -> None:
@@ -389,6 +399,25 @@ async def tax_balance() -> dict[str, Any]:
     user_id = _require_user_id()
     cache = _get_ledger_cache()
     s = _get_settings()
+
+    # One-time reconciliation per user per process lifetime
+    if user_id not in _reconciled_users:
+        _reconciled_users.add(user_id)
+        try:
+            btcpay = _get_btcpay()
+            from tollbooth.tools.credits import reconcile_pending_invoices
+            recon = await reconcile_pending_invoices(
+                btcpay, cache, user_id,
+                tier_config_json=s.btcpay_tier_config,
+                user_tiers_json=s.btcpay_user_tiers,
+            )
+            if recon["reconciled"] > 0:
+                logger.info(
+                    "Reconciled %d pending invoice(s) for %s: %s",
+                    recon["reconciled"], user_id, recon["actions"],
+                )
+        except Exception:
+            logger.warning("Reconciliation failed for %s (non-fatal).", user_id)
 
     return await check_balance_tool(
         cache, user_id,
