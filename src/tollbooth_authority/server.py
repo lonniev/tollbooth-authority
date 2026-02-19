@@ -8,7 +8,9 @@ import math
 import signal
 import sys
 from datetime import datetime, timezone
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +38,41 @@ mcp = FastMCP(
     "tollbooth-authority",
     instructions=(
         "Tollbooth Authority — Certified Purchase Order Service.\n\n"
-        "Manages operator registrations, collects operator tax via Lightning,\n"
-        "and certifies purchase orders with EdDSA-signed JWT certificates.\n"
+        "The Authority is the institutional backbone of the Tollbooth ecosystem. "
+        "It registers MCP operators, collects a small tax on every purchase order "
+        "via Bitcoin Lightning, and issues EdDSA-signed JWT certificates that prove "
+        "an operator has paid before collecting a fare from a user.\n\n"
+        "## First-Time Bootstrap (follow these steps in order)\n\n"
+        "1. Call `register_operator` — creates your ledger entry. Returns your "
+        "operator_id and a zero balance.\n"
+        "2. Call `purchase_tax_credits` with the number of sats to pre-fund "
+        "(e.g., 1000). Returns a Lightning invoice with a checkoutLink.\n"
+        "3. Pay the invoice using any Lightning wallet.\n"
+        "4. Call `check_tax_payment` with the invoice_id from step 2. "
+        "On settlement, your tax balance is credited.\n"
+        "5. Call `tax_balance` or `operator_status` to confirm your funded balance "
+        "and retrieve the Authority's Ed25519 public key.\n\n"
+        "## Tax Computation\n\n"
+        "Tax per certification = max(TAX_MIN_SATS, ceil(amount_sats * TAX_RATE_PERCENT / 100)). "
+        "Defaults: 2% rate, 10 sat minimum. The tax is deducted from the operator's "
+        "pre-funded balance when `certify_purchase` is called.\n\n"
+        "## Tool Overview\n\n"
+        "- `register_operator` — First step. Idempotent; safe to call again.\n"
+        "- `purchase_tax_credits` — Creates a Lightning invoice. Call whenever balance is low.\n"
+        "- `check_tax_payment` — Polls an invoice. Call after payment; safe to call multiple times.\n"
+        "- `tax_balance` — Read-only balance check. No side effects.\n"
+        "- `operator_status` — Registration info + Authority public key for JWT verification.\n"
+        "- `certify_purchase` — Core machine-to-machine tool. Deducts tax, returns signed JWT.\n"
+        "- `refresh_config` — Admin tool. Hot-reloads env vars without redeploy.\n\n"
+        "## Low-Balance Recovery\n\n"
+        "If `certify_purchase` returns 'Insufficient tax balance', the operator must "
+        "fund more credits: call `purchase_tax_credits`, pay, then `check_tax_payment`. "
+        "The operator's MCP server should surface this to the admin, not the end user.\n\n"
+        "## Key Generation\n\n"
+        "The Authority signs certificates with an Ed25519 key. Generate one with "
+        "`python scripts/generate_keypair.py`. The private key goes in "
+        "AUTHORITY_SIGNING_KEY; the public key is hardcoded in tollbooth-dpyc "
+        "for verification.\n"
     ),
 )
 
@@ -217,10 +252,21 @@ def _register_shutdown_handlers() -> None:
 
 @mcp.tool()
 async def register_operator() -> dict[str, Any]:
-    """Register as an operator via Horizon OAuth identity.
+    """Register as an operator on the Tollbooth turnpike via Horizon OAuth identity.
 
-    Creates a ledger entry for the authenticated operator so they can
-    purchase tax credits and certify purchase orders.
+    Call this first. Creates a ledger entry for the authenticated operator so
+    they can purchase tax credits and certify purchase orders. Idempotent — safe
+    to call again if already registered (returns current balance).
+
+    Returns:
+        success: Always True on completion.
+        operator_id: Your Horizon user ID (use this for certify_purchase calls).
+        balance_sats: Current tax balance (0 for new registrations).
+        message: Human-readable confirmation.
+
+    Next step: Call purchase_tax_credits to fund your tax balance.
+
+    Errors: Fails if not authenticated via Horizon (FastMCP Cloud required).
     """
     user_id = _require_user_id()
     cache = _get_ledger_cache()
@@ -238,11 +284,39 @@ async def register_operator() -> dict[str, Any]:
 
 
 @mcp.tool()
-async def purchase_tax_credits(amount_sats: int) -> dict[str, Any]:
+async def purchase_tax_credits(
+    amount_sats: Annotated[
+        int,
+        Field(
+            description=(
+                "Number of satoshis to pre-fund into your tax balance. "
+                "This is the tax reserve, not the user-facing price. "
+                "At 2% tax rate, 1000 sats funds ~50,000 sats of certified purchases. "
+                "Minimum 1."
+            ),
+        ),
+    ],
+) -> dict[str, Any]:
     """Create a Lightning invoice to pre-fund your operator tax balance.
 
-    Args:
-        amount_sats: Number of satoshis to purchase (minimum 1).
+    Call this whenever your tax balance is low or zero. Returns a Lightning
+    invoice with a checkoutLink — pay it with any Lightning wallet. After
+    payment, call check_tax_payment with the returned invoice_id to credit
+    your balance.
+
+    Do NOT call this if you already have a pending unpaid invoice — pay the
+    existing one first, or let it expire.
+
+    Returns:
+        success: True if invoice was created.
+        invoice_id: The BTCPay invoice ID (pass to check_tax_payment).
+        checkout_link: URL to pay the Lightning invoice.
+        amount_sats: The amount requested.
+
+    Next step: Pay the invoice, then call check_tax_payment(invoice_id).
+
+    Errors: Fails if not registered (call register_operator first) or if
+    BTCPay is unreachable.
     """
     user_id = _require_user_id()
     btcpay = _get_btcpay()
@@ -252,11 +326,33 @@ async def purchase_tax_credits(amount_sats: int) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def check_tax_payment(invoice_id: str) -> dict[str, Any]:
-    """Verify invoice settlement and credit your operator tax balance.
+async def check_tax_payment(
+    invoice_id: Annotated[
+        str,
+        Field(
+            description=(
+                "The BTCPay invoice ID returned by purchase_tax_credits. "
+                "Example: 'AbCdEfGh1234'. Pass exactly the value from the "
+                "invoice_id field of the purchase_tax_credits response."
+            ),
+        ),
+    ],
+) -> dict[str, Any]:
+    """Verify that a Lightning invoice has settled and credit the payment to your tax balance.
 
-    Args:
-        invoice_id: The BTCPay invoice ID from purchase_tax_credits.
+    Call this after paying the invoice from purchase_tax_credits. Safe to call
+    multiple times — credits are only granted once per invoice. If the invoice
+    hasn't settled yet, returns the current status without crediting.
+
+    Returns:
+        success: True if balance was credited (or already was).
+        status: BTCPay invoice status (e.g., 'Settled', 'New', 'Processing').
+        balance_sats: Updated tax balance after crediting.
+
+    Next step: Call tax_balance or operator_status to confirm, then
+    certify_purchase when ready to stamp purchase orders.
+
+    Errors: Returns success=False if the invoice_id is invalid or expired.
     """
     user_id = _require_user_id()
     btcpay = _get_btcpay()
@@ -267,7 +363,19 @@ async def check_tax_payment(invoice_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 async def tax_balance() -> dict[str, Any]:
-    """Check your current operator tax balance and usage summary."""
+    """Check your current operator tax balance, total deposited, total consumed, and pending invoices.
+
+    Read-only — no side effects. Call anytime to check your funding level
+    before certifying, or to monitor usage.
+
+    Returns:
+        balance_sats: Current available tax balance.
+        total_deposited_sats: Lifetime credits purchased.
+        total_consumed_sats: Lifetime tax deducted via certify_purchase.
+        pending_invoices: Number of unpaid invoices.
+
+    Next step: If balance is low, call purchase_tax_credits to top up.
+    """
     user_id = _require_user_id()
     cache = _get_ledger_cache()
 
@@ -276,7 +384,23 @@ async def tax_balance() -> dict[str, Any]:
 
 @mcp.tool()
 async def operator_status() -> dict[str, Any]:
-    """Registration status and Authority public key info."""
+    """View your registration status, balance summary, and the Authority's Ed25519 public key.
+
+    Call this to retrieve the Authority's public key for hardcoding into your
+    tollbooth-dpyc integration. Also useful as a health check to confirm
+    registration and current balance.
+
+    Returns:
+        operator_id: Your Horizon user ID.
+        registered: Always True if the call succeeds.
+        balance_sats: Current tax balance.
+        total_deposited_sats: Lifetime credits purchased.
+        total_consumed_sats: Lifetime tax deducted.
+        authority_public_key: PEM-encoded Ed25519 public key for JWT verification.
+
+    The authority_public_key should be hardcoded in your tollbooth-dpyc
+    TollboothConfig so the library can verify certificates locally.
+    """
     user_id = _require_user_id()
 
     try:
@@ -299,16 +423,52 @@ async def operator_status() -> dict[str, Any]:
 
 
 @mcp.tool()
-async def certify_purchase(operator_id: str, amount_sats: int) -> dict[str, Any]:
-    """Certify a purchase order: deduct tax from operator balance, return signed JWT.
+async def certify_purchase(
+    operator_id: Annotated[
+        str,
+        Field(
+            description=(
+                "The operator's Horizon user ID (from register_operator response). "
+                "This is the FastMCP Cloud user ID, not a GitHub username. "
+                "Example: 'user_01KGZY...'."
+            ),
+        ),
+    ],
+    amount_sats: Annotated[
+        int,
+        Field(
+            description=(
+                "The total purchase amount in satoshis that the user wants to buy. "
+                "The Authority computes tax as max(10, ceil(amount_sats * 2 / 100)) "
+                "and deducts it from the operator's pre-funded tax balance. "
+                "The certificate's net_sats = amount_sats - tax_sats. "
+                "Must be positive."
+            ),
+        ),
+    ],
+) -> dict[str, Any]:
+    """Certify a purchase order: deduct tax from the operator's balance and return an EdDSA-signed JWT.
 
-    This is the core machine-to-machine tool. The returned JWT should be
-    verified by tollbooth-dpyc using the Authority's public key before
-    the operator creates a user invoice.
+    This is the core machine-to-machine tool. Called by the operator's MCP server
+    (not by end users) when a user requests to purchase credits. The returned JWT
+    certificate must be verified by tollbooth-dpyc using the Authority's public key
+    before the operator creates a Lightning invoice for the user.
 
-    Args:
-        operator_id: The operator's Horizon user ID.
-        amount_sats: The purchase amount in satoshis to certify.
+    Do NOT call this as an end user — it requires operator-level context.
+    Do NOT call this if the operator's tax balance is insufficient — check
+    tax_balance first, or handle the 'Insufficient tax balance' error.
+
+    Returns:
+        success: True if the certificate was issued.
+        certificate: The EdDSA-signed JWT string (pass to tollbooth-dpyc for verification).
+        jti: Unique certificate ID (for audit/anti-replay).
+        amount_sats: The original purchase amount.
+        tax_paid_sats: Tax deducted from operator balance.
+        net_sats: amount_sats minus tax (what the user effectively receives).
+        expires_at: Unix timestamp when the certificate expires.
+
+    On 'Insufficient tax balance' error: call purchase_tax_credits to top up,
+    pay the invoice, call check_tax_payment, then retry certify_purchase.
     """
     if amount_sats <= 0:
         return {"success": False, "error": "amount_sats must be positive."}
@@ -364,9 +524,19 @@ async def certify_purchase(operator_id: str, amount_sats: int) -> dict[str, Any]
 
 @mcp.tool()
 async def refresh_config() -> dict[str, Any]:
-    """Hot-reload environment variables without redeploy.
+    """Hot-reload environment variables without redeploying the service.
 
-    Resets all singletons so they pick up new env vars on next use.
+    Admin-only tool. Flushes all dirty ledger entries to persistent storage,
+    closes BTCPay and vault connections, then resets all singletons so they
+    pick up new env vars on next use. Use after updating env vars in the
+    FastMCP Cloud dashboard.
+
+    Returns:
+        success: True if reload completed.
+        message: Confirmation that singletons will be re-created on next use.
+
+    Warning: Causes a brief interruption — all cached state is flushed and
+    connections are closed. Active requests may see transient errors.
     """
     global _settings, _settings_loaded, _signer, _btcpay_client, _vault, _ledger_cache, _replay_tracker
 
