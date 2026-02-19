@@ -21,7 +21,7 @@ from tollbooth import BTCPayClient, BTCPayError, LedgerCache
 from tollbooth.tools.credits import (
     check_balance_tool,
     check_payment_tool,
-    purchase_credits_tool,
+    purchase_tax_credits_tool,
 )
 
 from tollbooth_authority.certificate import create_certificate_claims
@@ -323,7 +323,7 @@ async def purchase_tax_credits(
     cache = _get_ledger_cache()
     s = _get_settings()
 
-    return await purchase_credits_tool(
+    return await purchase_tax_credits_tool(
         btcpay, cache, user_id, amount_sats,
         tier_config_json=s.btcpay_tier_config,
         user_tiers_json=s.btcpay_user_tiers,
