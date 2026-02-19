@@ -1,0 +1,5 @@
+name: tollbooth-authority
+install: pip install -e .
+command: python -m tollbooth_authority.server
+runtime:
+  python: "3.12"
