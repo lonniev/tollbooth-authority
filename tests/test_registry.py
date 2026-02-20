@@ -11,10 +11,15 @@ import pytest
 from tollbooth_authority.registry import DPYCRegistry, RegistryError
 
 
-SAMPLE_MEMBERS = [
+SAMPLE_MEMBERS_LIST = [
     {"npub": "npub1active000000000000000000000000000000000000000000000000abc", "name": "Alice", "status": "active"},
     {"npub": "npub1inactive0000000000000000000000000000000000000000000000xyz", "name": "Bob", "status": "inactive"},
 ]
+
+SAMPLE_MEMBERS_WRAPPED = {"members": SAMPLE_MEMBERS_LIST}
+
+# Alias for backwards compat with existing tests
+SAMPLE_MEMBERS = SAMPLE_MEMBERS_LIST
 
 REGISTRY_URL = "https://example.com/members.json"
 
@@ -78,11 +83,34 @@ async def test_invalid_json_raises():
 
 
 @pytest.mark.asyncio
-async def test_non_list_json_raises():
+async def test_wrapper_format_accepted():
+    """members.json with {"members": [...]} wrapper is parsed correctly."""
     registry = DPYCRegistry(REGISTRY_URL, cache_ttl_seconds=300)
-    registry._client.get = AsyncMock(return_value=_mock_response({"members": []}))
+    registry._client.get = AsyncMock(return_value=_mock_response(SAMPLE_MEMBERS_WRAPPED))
 
-    with pytest.raises(RegistryError, match="not a list"):
+    member = await registry.check_membership("npub1active000000000000000000000000000000000000000000000000abc")
+    assert member["name"] == "Alice"
+    await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_object_without_members_key_raises():
+    """JSON object missing 'members' key is rejected."""
+    registry = DPYCRegistry(REGISTRY_URL, cache_ttl_seconds=300)
+    registry._client.get = AsyncMock(return_value=_mock_response({"data": []}))
+
+    with pytest.raises(RegistryError, match="missing 'members' list"):
+        await registry.check_membership("npub1active000000000000000000000000000000000000000000000000abc")
+    await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_non_list_non_object_raises():
+    """Scalar JSON (string, number) is rejected."""
+    registry = DPYCRegistry(REGISTRY_URL, cache_ttl_seconds=300)
+    registry._client.get = AsyncMock(return_value=_mock_response("not a list"))
+
+    with pytest.raises(RegistryError, match="not a list or object"):
         await registry.check_membership("npub1active000000000000000000000000000000000000000000000000abc")
     await registry.close()
 
