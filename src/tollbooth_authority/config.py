@@ -39,4 +39,13 @@ class AuthoritySettings(BaseSettings):
     # Certificate TTL
     certificate_ttl_seconds: int = 600
 
+    # DPYC Nostr Identity
+    dpyc_authority_npub: str = ""
+    dpyc_upstream_authority_npub: str = ""
+
+    # DPYC Registry enforcement
+    dpyc_registry_url: str = "https://raw.githubusercontent.com/lonniev/dpyc-community/main/members.json"
+    dpyc_registry_cache_ttl_seconds: int = 300
+    dpyc_enforce_membership: bool = False  # opt-in; safe default
+
     model_config = {"env_file": ".env", "extra": "ignore"}
