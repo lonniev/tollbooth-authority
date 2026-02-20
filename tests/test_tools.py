@@ -17,6 +17,17 @@ from tollbooth_authority.registry import DPYCRegistry, RegistryError
 from tollbooth_authority.replay import ReplayTracker
 from tollbooth_authority.signing import AuthoritySigner
 
+SAMPLE_NPUB = "npub1l94pd4qu4eszrl6ek032ftcnsu3tt9a7xvq2zp7eaxeklp6mrpzssmq8pf"
+
+
+@pytest.fixture(autouse=True)
+def _clean_dpyc_sessions():
+    """Ensure DPYC sessions are clean before and after each test."""
+    import tollbooth_authority.server as srv
+    srv._dpyc_sessions.clear()
+    yield
+    srv._dpyc_sessions.clear()
+
 
 def _make_signer() -> AuthoritySigner:
     key = Ed25519PrivateKey.generate()
@@ -180,10 +191,13 @@ async def test_register_operator():
         patch.object(srv, "_require_user_id", return_value="op-1"),
         patch.object(srv, "_get_ledger_cache", return_value=cache),
     ):
-        result = await srv.register_operator()
+        result = await srv.register_operator(npub=SAMPLE_NPUB)
 
     assert result["success"] is True
-    assert result["operator_id"] == "op-1"
+    assert result["operator_id"] == SAMPLE_NPUB
+    assert result["dpyc_npub"] == SAMPLE_NPUB
+    cache.get.assert_called_once_with(SAMPLE_NPUB)
+    cache.mark_dirty.assert_called_once_with(SAMPLE_NPUB)
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +215,8 @@ async def test_operator_status():
     cache = MagicMock(spec=LedgerCache)
     cache.get = AsyncMock(return_value=ledger)
 
+    srv._dpyc_sessions["op-1"] = SAMPLE_NPUB
+
     with (
         patch.object(srv, "_require_user_id", return_value="op-1"),
         patch.object(srv, "_get_settings", return_value=settings),
@@ -209,7 +225,8 @@ async def test_operator_status():
     ):
         result = await srv.operator_status()
 
-    assert result["operator_id"] == "op-1"
+    assert result["operator_id"] == SAMPLE_NPUB
+    assert result["dpyc_npub"] == SAMPLE_NPUB
     assert result["registered"] is True
     assert result["balance_sats"] == 500
     assert "BEGIN PUBLIC KEY" in result["authority_public_key"]
@@ -230,6 +247,8 @@ async def test_operator_status_shows_upstream():
     ledger = UserLedger(balance_api_sats=500, total_deposited_api_sats=1000, total_consumed_api_sats=500)
     cache = MagicMock(spec=LedgerCache)
     cache.get = AsyncMock(return_value=ledger)
+
+    srv._dpyc_sessions["op-1"] = SAMPLE_NPUB
 
     with (
         patch.object(srv, "_require_user_id", return_value="op-1"),
@@ -264,6 +283,8 @@ async def test_check_tax_payment_fires_upstream_payout():
 
     mock_result = {"success": True, "status": "Settled", "balance_api_sats": 1000}
 
+    srv._dpyc_sessions["op-1"] = SAMPLE_NPUB
+
     with (
         patch.object(srv, "_require_user_id", return_value="op-1"),
         patch.object(srv, "_get_settings", return_value=settings),
@@ -293,6 +314,8 @@ async def test_check_tax_payment_no_upstream_for_prime():
     cache = MagicMock(spec=LedgerCache)
 
     mock_result = {"success": True, "status": "Settled", "balance_api_sats": 1000}
+
+    srv._dpyc_sessions["op-1"] = SAMPLE_NPUB
 
     with (
         patch.object(srv, "_require_user_id", return_value="op-1"),
@@ -489,6 +512,8 @@ async def test_operator_status_shows_supply():
     cache = MagicMock(spec=LedgerCache)
     cache.get = AsyncMock(side_effect=fake_get)
 
+    srv._dpyc_sessions["op-1"] = SAMPLE_NPUB
+
     with (
         patch.object(srv, "_require_user_id", return_value="op-1"),
         patch.object(srv, "_get_settings", return_value=settings),
@@ -507,75 +532,46 @@ async def test_operator_status_shows_supply():
 
 
 @pytest.mark.asyncio
-async def test_activate_dpyc_valid_npub():
+async def test_activate_dpyc_deprecated():
+    """activate_dpyc returns deprecation message regardless of input."""
     import tollbooth_authority.server as srv
 
-    npub = "npub1l94pd4qu4eszrl6ek032ftcnsu3tt9a7xvq2zp7eaxeklp6mrpzssmq8pf"
-    with patch.object(srv, "_require_user_id", return_value="horizon-1"):
-        result = await srv.activate_dpyc(npub)
+    result = await srv.activate_dpyc(SAMPLE_NPUB)
 
-    assert result["success"] is True
-    assert result["horizon_id"] == "horizon-1"
-    assert result["effective_id"] == npub
-    # Clean up
-    srv._dpyc_sessions.clear()
+    assert result["success"] is False
+    assert "deprecated" in result["error"].lower()
+    assert "register_operator" in result["error"]
 
 
 @pytest.mark.asyncio
-async def test_activate_dpyc_invalid_format():
+async def test_activate_dpyc_deprecated_invalid_also():
+    """activate_dpyc returns same deprecation message even for invalid npub."""
+    import tollbooth_authority.server as srv
+
+    result = await srv.activate_dpyc("not-an-npub")
+
+    assert result["success"] is False
+    assert "deprecated" in result["error"].lower()
+    assert "register_operator" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_register_operator_invalid_npub():
+    """register_operator rejects invalid npub format."""
     import tollbooth_authority.server as srv
 
     with patch.object(srv, "_require_user_id", return_value="horizon-1"):
-        result = await srv.activate_dpyc("not-an-npub")
+        result = await srv.register_operator(npub="not-an-npub")
 
     assert result["success"] is False
     assert "Invalid npub" in result["error"]
+    assert "dpyc-oracle" in result["error"]
 
 
 @pytest.mark.asyncio
-async def test_get_dpyc_identity_without_session():
+async def test_register_operator_auto_activates_dpyc():
+    """register_operator auto-activates DPYC session for the Horizon user."""
     import tollbooth_authority.server as srv
-
-    settings = _make_settings(dpyc_authority_npub="npub1authority")
-    with (
-        patch.object(srv, "_require_user_id", return_value="horizon-1"),
-        patch.object(srv, "_get_settings", return_value=settings),
-    ):
-        result = await srv.get_dpyc_identity()
-
-    assert result["horizon_id"] == "horizon-1"
-    assert result["dpyc_npub"] is None
-    assert result["effective_id"] == "horizon-1"
-    assert result["authority_npub"] == "npub1authority"
-
-
-@pytest.mark.asyncio
-async def test_get_dpyc_identity_with_session():
-    import tollbooth_authority.server as srv
-
-    npub = "npub1l94pd4qu4eszrl6ek032ftcnsu3tt9a7xvq2zp7eaxeklp6mrpzssmq8pf"
-    srv._dpyc_sessions["horizon-1"] = npub
-    settings = _make_settings(dpyc_authority_npub="")
-
-    with (
-        patch.object(srv, "_require_user_id", return_value="horizon-1"),
-        patch.object(srv, "_get_settings", return_value=settings),
-    ):
-        result = await srv.get_dpyc_identity()
-
-    assert result["dpyc_npub"] == npub
-    assert result["effective_id"] == npub
-    assert result["authority_npub"] is None
-    srv._dpyc_sessions.clear()
-
-
-@pytest.mark.asyncio
-async def test_register_operator_uses_effective_id():
-    """When DPYC session is active, register_operator uses npub."""
-    import tollbooth_authority.server as srv
-
-    npub = "npub1l94pd4qu4eszrl6ek032ftcnsu3tt9a7xvq2zp7eaxeklp6mrpzssmq8pf"
-    srv._dpyc_sessions["horizon-1"] = npub
 
     ledger = UserLedger(balance_api_sats=0)
     cache = MagicMock(spec=LedgerCache)
@@ -587,11 +583,50 @@ async def test_register_operator_uses_effective_id():
         patch.object(srv, "_require_user_id", return_value="horizon-1"),
         patch.object(srv, "_get_ledger_cache", return_value=cache),
     ):
-        result = await srv.register_operator()
+        result = await srv.register_operator(npub=SAMPLE_NPUB)
 
-    assert result["operator_id"] == npub
-    cache.get.assert_called_once_with(npub)
-    srv._dpyc_sessions.clear()
+    assert result["success"] is True
+    assert result["operator_id"] == SAMPLE_NPUB
+    # DPYC session should be auto-activated
+    assert srv._dpyc_sessions.get("horizon-1") == SAMPLE_NPUB
+    cache.get.assert_called_once_with(SAMPLE_NPUB)
+
+
+@pytest.mark.asyncio
+async def test_register_operator_uses_npub_for_ledger():
+    """register_operator uses the provided npub as ledger key."""
+    import tollbooth_authority.server as srv
+
+    ledger = UserLedger(balance_api_sats=42)
+    cache = MagicMock(spec=LedgerCache)
+    cache.get = AsyncMock(return_value=ledger)
+    cache.mark_dirty = MagicMock()
+    cache.flush_user = AsyncMock(return_value=True)
+
+    with (
+        patch.object(srv, "_require_user_id", return_value="horizon-1"),
+        patch.object(srv, "_get_ledger_cache", return_value=cache),
+    ):
+        result = await srv.register_operator(npub=SAMPLE_NPUB)
+
+    assert result["operator_id"] == SAMPLE_NPUB
+    assert result["balance_sats"] == 42
+    cache.get.assert_called_once_with(SAMPLE_NPUB)
+    cache.mark_dirty.assert_called_once_with(SAMPLE_NPUB)
+    cache.flush_user.assert_called_once_with(SAMPLE_NPUB)
+
+
+@pytest.mark.asyncio
+async def test_purchase_tax_credits_no_dpyc_returns_error():
+    """purchase_tax_credits without DPYC session returns helpful error."""
+    import tollbooth_authority.server as srv
+
+    with patch.object(srv, "_require_user_id", return_value="op-1"):
+        result = await srv.purchase_tax_credits(1000)
+
+    assert result["success"] is False
+    assert "No DPYC identity active" in result["error"]
+    assert "register_operator" in result["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -846,6 +881,8 @@ async def test_operator_status_shows_dpyc_info():
     ledger = UserLedger(balance_api_sats=500, total_deposited_api_sats=1000, total_consumed_api_sats=500)
     cache = MagicMock(spec=LedgerCache)
     cache.get = AsyncMock(return_value=ledger)
+
+    srv._dpyc_sessions["op-1"] = SAMPLE_NPUB
 
     with (
         patch.object(srv, "_require_user_id", return_value="op-1"),

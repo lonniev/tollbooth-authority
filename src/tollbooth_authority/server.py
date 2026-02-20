@@ -44,8 +44,9 @@ mcp = FastMCP(
         "via Bitcoin Lightning, and issues EdDSA-signed JWT certificates that prove "
         "an operator has paid before collecting a fare from a user.\n\n"
         "## First-Time Bootstrap (follow these steps in order)\n\n"
-        "1. Call `register_operator` — creates your ledger entry. Returns your "
-        "operator_id and a zero balance.\n"
+        "1. Call `register_operator(npub=...)` with your Nostr npub — creates your "
+        "ledger entry. Get your npub from the dpyc-oracle's how_to_join() tool. "
+        "Returns your operator_id (npub) and a zero balance.\n"
         "2. Call `purchase_tax_credits` with the number of sats to pre-fund "
         "(e.g., 1000). Returns a Lightning invoice with a checkoutLink.\n"
         "3. Pay the invoice using any Lightning wallet.\n"
@@ -204,7 +205,7 @@ def _require_user_id() -> str:
 
 
 # ---------------------------------------------------------------------------
-# DPYC identity (Phase 1 dual-key: Horizon ID or Nostr npub)
+# DPYC identity (npub-primary: npub is the sole credit identity)
 # ---------------------------------------------------------------------------
 
 _dpyc_sessions: dict[str, str] = {}  # Horizon user_id → npub
@@ -212,9 +213,20 @@ _dpyc_registry: DPYCRegistry | None = None
 
 
 def _get_effective_user_id() -> str:
-    """Return npub if DPYC session active, else Horizon user_id (Phase 1 dual-key)."""
+    """Return the npub for the current user. Requires an active DPYC session.
+
+    Raises ValueError if no DPYC session is active (npub not set).
+    Horizon OAuth remains the transport auth layer, but the npub is the
+    sole identity for all ledger/credit operations.
+    """
     horizon_id = _require_user_id()
-    return _dpyc_sessions.get(horizon_id, horizon_id)
+    npub = _dpyc_sessions.get(horizon_id)
+    if not npub:
+        raise ValueError(
+            "No DPYC identity active. Call register_operator(npub=...) first. "
+            "Get your npub from the dpyc-oracle's how_to_join() tool."
+        )
+    return npub
 
 
 def _get_dpyc_registry() -> DPYCRegistry | None:
@@ -303,35 +315,64 @@ SUPPLY_USER_ID = "__upstream_supply__"
 
 
 @mcp.tool()
-async def register_operator() -> dict[str, Any]:
+async def register_operator(
+    npub: Annotated[
+        str,
+        Field(
+            description=(
+                "Your Nostr public key in bech32 format (npub1...). "
+                "This becomes your persistent operator identity for all "
+                "ledger operations. Get one from the dpyc-oracle's how_to_join() tool."
+            ),
+        ),
+    ] = "",
+) -> dict[str, Any]:
     """Register as an operator on the Tollbooth turnpike via Horizon OAuth identity.
 
     Call this first. Creates a ledger entry for the authenticated operator so
     they can purchase tax credits and certify purchase orders. Idempotent — safe
     to call again if already registered (returns current balance).
 
+    Your DPYC npub (Nostr public key) is required — it serves as your
+    persistent identity for all ledger and credit operations. Obtain one from
+    the dpyc-oracle's how_to_join() tool if you don't have one yet.
+
     Returns:
         success: Always True on completion.
-        operator_id: Your Horizon user ID (use this for certify_purchase calls).
+        operator_id: Your npub (use this for certify_purchase calls).
         balance_sats: Current tax balance (0 for new registrations).
         message: Human-readable confirmation.
 
     Next step: Call purchase_tax_credits to fund your tax balance.
 
-    Errors: Fails if not authenticated via Horizon (FastMCP Cloud required).
+    Errors: Fails if not authenticated via Horizon (FastMCP Cloud required)
+    or if npub is invalid.
     """
-    user_id = _get_effective_user_id()
-    cache = _get_ledger_cache()
+    if not npub.startswith("npub1") or len(npub) < 60:
+        return {
+            "success": False,
+            "error": (
+                "Invalid npub format. Must start with 'npub1' and be at least 60 characters. "
+                "Get your npub from the dpyc-oracle's how_to_join() tool."
+            ),
+        }
 
-    ledger = await cache.get(user_id)
-    cache.mark_dirty(user_id)
-    await cache.flush_user(user_id)
+    horizon_id = _require_user_id()
+
+    # Auto-activate DPYC identity
+    _dpyc_sessions[horizon_id] = npub
+
+    cache = _get_ledger_cache()
+    ledger = await cache.get(npub)
+    cache.mark_dirty(npub)
+    await cache.flush_user(npub)
 
     return {
         "success": True,
-        "operator_id": user_id,
+        "operator_id": npub,
         "balance_sats": ledger.balance_api_sats,
-        "message": f"Operator {user_id} registered. Purchase tax credits to begin certifying.",
+        "dpyc_npub": npub,
+        "message": f"Operator {npub} registered. Purchase tax credits to begin certifying.",
     }
 
 
@@ -370,7 +411,11 @@ async def purchase_tax_credits(
     Errors: Fails if not registered (call register_operator first) or if
     BTCPay is unreachable.
     """
-    user_id = _get_effective_user_id()
+    try:
+        user_id = _get_effective_user_id()
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+
     btcpay = _get_btcpay()
     cache = _get_ledger_cache()
     s = _get_settings()
@@ -411,7 +456,11 @@ async def check_tax_payment(
 
     Errors: Returns success=False if the invoice_id is invalid or expired.
     """
-    user_id = _get_effective_user_id()
+    try:
+        user_id = _get_effective_user_id()
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+
     btcpay = _get_btcpay()
     cache = _get_ledger_cache()
     s = _get_settings()
@@ -441,7 +490,11 @@ async def tax_balance() -> dict[str, Any]:
 
     Next step: If balance is low, call purchase_tax_credits to top up.
     """
-    user_id = _get_effective_user_id()
+    try:
+        user_id = _get_effective_user_id()
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+
     cache = _get_ledger_cache()
     s = _get_settings()
 
@@ -490,7 +543,11 @@ async def operator_status() -> dict[str, Any]:
     The authority_public_key should be hardcoded in your tollbooth-dpyc
     TollboothConfig so the library can verify certificates locally.
     """
-    user_id = _get_effective_user_id()
+    try:
+        user_id = _get_effective_user_id()
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+
     s = _get_settings()
 
     try:
@@ -504,6 +561,7 @@ async def operator_status() -> dict[str, Any]:
 
     result: dict[str, Any] = {
         "operator_id": user_id,
+        "dpyc_npub": user_id,
         "registered": True,
         "balance_sats": ledger.balance_api_sats,
         "total_deposited_sats": ledger.total_deposited_api_sats,
@@ -535,9 +593,9 @@ async def certify_purchase(
         str,
         Field(
             description=(
-                "The operator's Horizon user ID (from register_operator response). "
-                "This is the FastMCP Cloud user ID, not a GitHub username. "
-                "Example: 'user_01KGZY...'."
+                "The operator's DPYC npub (from register_operator response). "
+                "This is the operator's Nostr public key used as their persistent identity. "
+                "Example: 'npub1abc...'."
             ),
         ),
     ],
@@ -761,64 +819,19 @@ async def refresh_config() -> dict[str, Any]:
 
 @mcp.tool()
 async def activate_dpyc(npub: str) -> dict[str, Any]:
-    """Set your DPYC Nostr identity for this session.
+    """Deprecated — npub is now set during register_operator.
 
-    After activation, all ledger operations (register_operator, purchase_tax_credits,
-    tax_balance, etc.) key on your npub instead of your Horizon user ID.
-
-    Warning: Activating starts a fresh ledger under the npub key. Any existing
-    balance under your Horizon ID remains there — it is not migrated.
-
-    Args:
-        npub: Your Nostr public key in bech32 format (npub1...).
-
-    Returns:
-        success: True if the session was activated.
-        horizon_id: Your underlying Horizon user ID.
-        effective_id: The npub now used for ledger operations.
+    This tool is kept for backward compatibility. Use register_operator(npub=...)
+    instead, which registers your operator identity and activates DPYC in one step.
     """
-    if not npub.startswith("npub1") or len(npub) < 60:
-        return {
-            "success": False,
-            "error": "Invalid npub format. Must start with 'npub1' and be at least 60 characters.",
-        }
-
-    horizon_id = _require_user_id()
-    _dpyc_sessions[horizon_id] = npub
-
     return {
-        "success": True,
-        "horizon_id": horizon_id,
-        "effective_id": npub,
-        "message": (
-            "DPYC identity activated. Ledger operations now use your npub. "
-            "Note: this starts a fresh ledger under the npub key."
+        "success": False,
+        "error": (
+            "activate_dpyc is deprecated. Your npub is now set during "
+            "register_operator(npub=...). Call register_operator with your npub "
+            "to register and activate your DPYC identity in one step. "
+            "Get your npub from the dpyc-oracle's how_to_join() tool."
         ),
-    }
-
-
-@mcp.tool()
-async def get_dpyc_identity() -> dict[str, Any]:
-    """Return the current DPYC identity state for this session.
-
-    Shows the Horizon user ID, whether a DPYC npub session is active,
-    and the effective ID used for ledger operations.
-
-    Returns:
-        horizon_id: Your Horizon user ID (always present).
-        dpyc_npub: Your DPYC npub if activated, else null.
-        effective_id: The ID currently used for ledger keying.
-        authority_npub: This Authority's DPYC npub (if configured).
-    """
-    horizon_id = _require_user_id()
-    npub = _dpyc_sessions.get(horizon_id)
-    s = _get_settings()
-
-    return {
-        "horizon_id": horizon_id,
-        "dpyc_npub": npub,
-        "effective_id": npub or horizon_id,
-        "authority_npub": s.dpyc_authority_npub or None,
     }
 
 
