@@ -29,6 +29,13 @@ class AuthoritySettings(BaseSettings):
     tax_rate_percent: float = 2.0
     tax_min_sats: int = 10
 
+    # Upstream Authority chain — revenue backflow
+    # When an operator buys cert_sats from this Authority, fire a % payout
+    # to the upstream Authority's Lightning Address. Empty = Prime Authority.
+    upstream_authority_address: str = ""
+    upstream_tax_percent: float = 2.0
+    upstream_tax_min_sats: int = 10
+
     # Certificate TTL
     certificate_ttl_seconds: int = 600
 

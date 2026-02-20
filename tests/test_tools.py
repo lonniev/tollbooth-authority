@@ -195,12 +195,14 @@ async def test_operator_status():
     import tollbooth_authority.server as srv
 
     signer = _make_signer()
+    settings = _make_settings()
     ledger = UserLedger(balance_api_sats=500, total_deposited_api_sats=1000, total_consumed_api_sats=500)
     cache = MagicMock(spec=LedgerCache)
     cache.get = AsyncMock(return_value=ledger)
 
     with (
         patch.object(srv, "_require_user_id", return_value="op-1"),
+        patch.object(srv, "_get_settings", return_value=settings),
         patch.object(srv, "_get_signer", return_value=signer),
         patch.object(srv, "_get_ledger_cache", return_value=cache),
     ):
@@ -210,3 +212,95 @@ async def test_operator_status():
     assert result["registered"] is True
     assert result["balance_sats"] == 500
     assert "BEGIN PUBLIC KEY" in result["authority_public_key"]
+    # Prime Authority — no upstream config surfaced
+    assert "upstream_authority_address" not in result
+
+
+@pytest.mark.asyncio
+async def test_operator_status_shows_upstream():
+    """operator_status surfaces upstream chain config when configured."""
+    import tollbooth_authority.server as srv
+
+    signer = _make_signer()
+    settings = _make_settings(
+        upstream_authority_address="upstream@btcpay.example.com",
+        upstream_tax_percent=3.0,
+    )
+    ledger = UserLedger(balance_api_sats=500, total_deposited_api_sats=1000, total_consumed_api_sats=500)
+    cache = MagicMock(spec=LedgerCache)
+    cache.get = AsyncMock(return_value=ledger)
+
+    with (
+        patch.object(srv, "_require_user_id", return_value="op-1"),
+        patch.object(srv, "_get_settings", return_value=settings),
+        patch.object(srv, "_get_signer", return_value=signer),
+        patch.object(srv, "_get_ledger_cache", return_value=cache),
+    ):
+        result = await srv.operator_status()
+
+    assert result["upstream_authority_address"] == "upstream@btcpay.example.com"
+    assert result["upstream_tax_percent"] == 3.0
+
+
+# ---------------------------------------------------------------------------
+# check_tax_payment — upstream tax payout
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_check_tax_payment_fires_upstream_payout():
+    """When upstream is configured, check_tax_payment passes royalty params."""
+    import tollbooth_authority.server as srv
+
+    settings = _make_settings(
+        upstream_authority_address="upstream@btcpay.example.com",
+        upstream_tax_percent=2.0,
+        upstream_tax_min_sats=10,
+    )
+
+    mock_btcpay = MagicMock()
+    cache = MagicMock(spec=LedgerCache)
+
+    mock_result = {"success": True, "status": "Settled", "balance_api_sats": 1000}
+
+    with (
+        patch.object(srv, "_require_user_id", return_value="op-1"),
+        patch.object(srv, "_get_settings", return_value=settings),
+        patch.object(srv, "_get_btcpay", return_value=mock_btcpay),
+        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch("tollbooth_authority.server.check_payment_tool", new_callable=AsyncMock, return_value=mock_result) as mock_cpt,
+    ):
+        result = await srv.check_tax_payment("inv-123")
+
+    assert result["success"] is True
+    # Verify upstream royalty params were passed
+    mock_cpt.assert_called_once()
+    call_kwargs = mock_cpt.call_args
+    assert call_kwargs.kwargs["royalty_address"] == "upstream@btcpay.example.com"
+    assert call_kwargs.kwargs["royalty_percent"] == 0.02  # 2.0 / 100
+    assert call_kwargs.kwargs["royalty_min_sats"] == 10
+
+
+@pytest.mark.asyncio
+async def test_check_tax_payment_no_upstream_for_prime():
+    """Prime Authority (no upstream) passes None for royalty_address."""
+    import tollbooth_authority.server as srv
+
+    settings = _make_settings(upstream_authority_address="")
+
+    mock_btcpay = MagicMock()
+    cache = MagicMock(spec=LedgerCache)
+
+    mock_result = {"success": True, "status": "Settled", "balance_api_sats": 1000}
+
+    with (
+        patch.object(srv, "_require_user_id", return_value="op-1"),
+        patch.object(srv, "_get_settings", return_value=settings),
+        patch.object(srv, "_get_btcpay", return_value=mock_btcpay),
+        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch("tollbooth_authority.server.check_payment_tool", new_callable=AsyncMock, return_value=mock_result) as mock_cpt,
+    ):
+        result = await srv.check_tax_payment("inv-123")
+
+    call_kwargs = mock_cpt.call_args
+    assert call_kwargs.kwargs["royalty_address"] is None
