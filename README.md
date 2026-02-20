@@ -109,11 +109,31 @@ pytest tests/ -q
 
 ## Key Generation
 
+### EdDSA Signing Key (JWT certificates)
+
 ```bash
 python scripts/generate_keypair.py
 ```
 
 Outputs the base64-encoded private key (for `AUTHORITY_SIGNING_KEY` env var) and the PEM public key (for hardcoding in tollbooth-dpyc).
+
+### DPYC Identity (Nostr npub)
+
+Each Authority has a Nostr keypair that identifies it on the DPYC Honor Chain. Generate one using the script in [tollbooth-dpyc](https://github.com/lonniev/tollbooth-dpyc):
+
+```bash
+pip install nostr-sdk
+python -c "from nostr_sdk import Keys; k = Keys.generate(); print(f'DPYC_AUTHORITY_NPUB={k.public_key().to_bech32()}'); print(f'nsec (back up!): {k.secret_key().to_bech32()}')"
+```
+
+Or clone tollbooth-dpyc and run `scripts/generate_nostr_keypair.py` for full output.
+
+Add to your `.env`:
+
+```
+DPYC_AUTHORITY_NPUB=npub1...
+DPYC_UPSTREAM_AUTHORITY_NPUB=       # empty for Prime Authority
+```
 
 ## Further Reading
 
