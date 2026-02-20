@@ -256,6 +256,13 @@ def _register_shutdown_handlers() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+SUPPLY_USER_ID = "__upstream_supply__"
+"""Reserved ledger user_id for tracking upstream cert-sats supply."""
+
+# ---------------------------------------------------------------------------
 # MCP Tools
 # ---------------------------------------------------------------------------
 
@@ -473,6 +480,10 @@ async def operator_status() -> dict[str, Any]:
     if s.upstream_authority_address:
         result["upstream_authority_address"] = s.upstream_authority_address
         result["upstream_tax_percent"] = s.upstream_tax_percent
+        # Surface supply ledger
+        supply = await cache.get(SUPPLY_USER_ID)
+        result["upstream_supply_sats"] = supply.balance_api_sats
+        result["upstream_supply_consumed_sats"] = supply.total_consumed_api_sats
 
     return result
 
@@ -549,6 +560,21 @@ async def certify_purchase(
 
     cache.mark_dirty(operator_id)
 
+    # Non-Prime: debit cert-sats from upstream supply
+    if s.upstream_authority_address:
+        supply = await cache.get(SUPPLY_USER_ID)
+        if not supply.debit("certify_supply", amount_sats):
+            # Rollback the tax debit
+            ledger.rollback_debit("certify_purchase", tax_sats)
+            return {
+                "success": False,
+                "error": (
+                    f"Insufficient upstream supply. Need {amount_sats} cert-sats, "
+                    f"have {supply.balance_api_sats}. Admin must purchase from upstream."
+                ),
+            }
+        cache.mark_dirty(SUPPLY_USER_ID)
+
     # Build and sign certificate
     claims = create_certificate_claims(
         operator_id=operator_id,
@@ -574,6 +600,52 @@ async def certify_purchase(
         "tax_paid_sats": tax_sats,
         "net_sats": claims["net_sats"],
         "expires_at": claims["exp"],
+    }
+
+
+@mcp.tool()
+async def report_upstream_purchase(
+    amount_sats: Annotated[
+        int,
+        Field(
+            description=(
+                "Number of cert-sats purchased from the upstream Authority. "
+                "Must be positive. Call this after completing an upstream purchase "
+                "to replenish the local supply ledger."
+            ),
+        ),
+    ],
+) -> dict[str, Any]:
+    """Report a completed upstream cert-sats purchase to replenish local supply.
+
+    Admin tool. After the Authority admin manually purchases cert-sats from
+    the upstream Authority (via purchase_tax_credits + check_tax_payment on
+    the upstream), call this to credit the local supply ledger so that
+    certify_purchase can proceed.
+
+    Returns:
+        success: True if the supply was credited.
+        supply_balance_sats: Updated supply balance after crediting.
+        credited_sats: The amount credited.
+
+    Errors: Fails if amount_sats is not positive.
+    """
+    if amount_sats <= 0:
+        return {"success": False, "error": "amount_sats must be positive."}
+
+    cache = _get_ledger_cache()
+    supply = await cache.get(SUPPLY_USER_ID)
+    supply.credit_deposit(
+        amount_sats,
+        invoice_id=f"upstream_{datetime.now(timezone.utc).isoformat()}",
+    )
+    cache.mark_dirty(SUPPLY_USER_ID)
+    await cache.flush_user(SUPPLY_USER_ID)
+
+    return {
+        "success": True,
+        "supply_balance_sats": supply.balance_api_sats,
+        "credited_sats": amount_sats,
     }
 
 
