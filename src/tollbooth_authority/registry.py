@@ -59,8 +59,16 @@ class DPYCRegistry:
         except Exception as e:
             raise RegistryError(f"Registry parse failed: {e}") from e
 
-        if not isinstance(data, list):
-            raise RegistryError("Registry JSON is not a list.")
+        # Handle both bare list and {"members": [...]} wrapper formats
+        if isinstance(data, dict):
+            if "members" in data and isinstance(data["members"], list):
+                data = data["members"]
+            else:
+                raise RegistryError(
+                    "Registry JSON object missing 'members' list."
+                )
+        elif not isinstance(data, list):
+            raise RegistryError("Registry JSON is not a list or object.")
 
         self._cache = data
         self._cache_time = now
