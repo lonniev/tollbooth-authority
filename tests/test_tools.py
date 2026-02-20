@@ -304,3 +304,197 @@ async def test_check_tax_payment_no_upstream_for_prime():
 
     call_kwargs = mock_cpt.call_args
     assert call_kwargs.kwargs["royalty_address"] is None
+
+
+# ---------------------------------------------------------------------------
+# Upstream supply constraint
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_certify_purchase_deducts_supply():
+    """Non-Prime Authority: certify_purchase debits amount_sats from supply ledger."""
+    import tollbooth_authority.server as srv
+
+    signer = _make_signer()
+    settings = _make_settings(
+        tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600,
+        upstream_authority_address="upstream@example.com",
+    )
+
+    operator_ledger = UserLedger(balance_api_sats=1000)
+    supply_ledger = UserLedger(balance_api_sats=5000)
+
+    async def fake_get(user_id: str) -> UserLedger:
+        if user_id == srv.SUPPLY_USER_ID:
+            return supply_ledger
+        return operator_ledger
+
+    cache = MagicMock(spec=LedgerCache)
+    cache.get = AsyncMock(side_effect=fake_get)
+    cache.mark_dirty = MagicMock()
+    cache.flush_user = AsyncMock(return_value=True)
+
+    replay = ReplayTracker(ttl_seconds=600)
+
+    with (
+        patch.object(srv, "_get_settings", return_value=settings),
+        patch.object(srv, "_get_signer", return_value=signer),
+        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv, "_get_replay_tracker", return_value=replay),
+    ):
+        result = await srv.certify_purchase("op-1", 1000)
+
+    assert result["success"] is True
+    # Supply should be debited by amount_sats (1000), not tax_sats
+    assert supply_ledger.balance_api_sats == 4000
+    # Verify supply was marked dirty
+    cache.mark_dirty.assert_any_call(srv.SUPPLY_USER_ID)
+
+
+@pytest.mark.asyncio
+async def test_certify_purchase_insufficient_supply():
+    """Non-Prime Authority: fails and rolls back tax when supply is too low."""
+    import tollbooth_authority.server as srv
+
+    signer = _make_signer()
+    settings = _make_settings(
+        tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600,
+        upstream_authority_address="upstream@example.com",
+    )
+
+    operator_ledger = UserLedger(balance_api_sats=1000)
+    supply_ledger = UserLedger(balance_api_sats=500)  # Not enough for 1000
+
+    async def fake_get(user_id: str) -> UserLedger:
+        if user_id == srv.SUPPLY_USER_ID:
+            return supply_ledger
+        return operator_ledger
+
+    cache = MagicMock(spec=LedgerCache)
+    cache.get = AsyncMock(side_effect=fake_get)
+    cache.mark_dirty = MagicMock()
+    cache.flush_user = AsyncMock(return_value=True)
+
+    replay = ReplayTracker(ttl_seconds=600)
+
+    with (
+        patch.object(srv, "_get_settings", return_value=settings),
+        patch.object(srv, "_get_signer", return_value=signer),
+        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv, "_get_replay_tracker", return_value=replay),
+    ):
+        result = await srv.certify_purchase("op-1", 1000)
+
+    assert result["success"] is False
+    assert "Insufficient upstream supply" in result["error"]
+    # Operator tax balance should be rolled back (tax_sats=20 was debited then restored)
+    assert operator_ledger.balance_api_sats == 1000
+    # Supply should be unchanged
+    assert supply_ledger.balance_api_sats == 500
+
+
+@pytest.mark.asyncio
+async def test_certify_purchase_prime_skips_supply():
+    """Prime Authority (no upstream): no supply check at all."""
+    import tollbooth_authority.server as srv
+
+    signer = _make_signer()
+    settings = _make_settings(
+        tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600,
+        upstream_authority_address="",  # Prime
+    )
+
+    operator_ledger = UserLedger(balance_api_sats=1000)
+
+    cache = MagicMock(spec=LedgerCache)
+    cache.get = AsyncMock(return_value=operator_ledger)
+    cache.mark_dirty = MagicMock()
+    cache.flush_user = AsyncMock(return_value=True)
+
+    replay = ReplayTracker(ttl_seconds=600)
+
+    with (
+        patch.object(srv, "_get_settings", return_value=settings),
+        patch.object(srv, "_get_signer", return_value=signer),
+        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv, "_get_replay_tracker", return_value=replay),
+    ):
+        result = await srv.certify_purchase("op-1", 1000)
+
+    assert result["success"] is True
+    # cache.get should only be called once (for operator), not for supply
+    cache.get.assert_called_once_with("op-1")
+
+
+@pytest.mark.asyncio
+async def test_report_upstream_purchase_credits_supply():
+    """report_upstream_purchase credits the supply ledger and returns new balance."""
+    import tollbooth_authority.server as srv
+
+    supply_ledger = UserLedger(balance_api_sats=500)
+
+    cache = MagicMock(spec=LedgerCache)
+    cache.get = AsyncMock(return_value=supply_ledger)
+    cache.mark_dirty = MagicMock()
+    cache.flush_user = AsyncMock(return_value=True)
+
+    with patch.object(srv, "_get_ledger_cache", return_value=cache):
+        result = await srv.report_upstream_purchase(1000)
+
+    assert result["success"] is True
+    assert result["supply_balance_sats"] == 1500
+    assert result["credited_sats"] == 1000
+    cache.mark_dirty.assert_called_once_with(srv.SUPPLY_USER_ID)
+    cache.flush_user.assert_called_once_with(srv.SUPPLY_USER_ID)
+
+
+@pytest.mark.asyncio
+async def test_report_upstream_purchase_negative_rejected():
+    """report_upstream_purchase rejects non-positive amounts."""
+    import tollbooth_authority.server as srv
+
+    result = await srv.report_upstream_purchase(-100)
+    assert result["success"] is False
+    assert "positive" in result["error"]
+
+    result = await srv.report_upstream_purchase(0)
+    assert result["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_operator_status_shows_supply():
+    """Non-Prime Authority: operator_status includes upstream supply fields."""
+    import tollbooth_authority.server as srv
+
+    signer = _make_signer()
+    settings = _make_settings(
+        upstream_authority_address="upstream@example.com",
+        upstream_tax_percent=3.0,
+    )
+
+    operator_ledger = UserLedger(
+        balance_api_sats=500, total_deposited_api_sats=1000, total_consumed_api_sats=500,
+    )
+    supply_ledger = UserLedger(
+        balance_api_sats=3000, total_consumed_api_sats=2000,
+    )
+
+    async def fake_get(user_id: str) -> UserLedger:
+        if user_id == srv.SUPPLY_USER_ID:
+            return supply_ledger
+        return operator_ledger
+
+    cache = MagicMock(spec=LedgerCache)
+    cache.get = AsyncMock(side_effect=fake_get)
+
+    with (
+        patch.object(srv, "_require_user_id", return_value="op-1"),
+        patch.object(srv, "_get_settings", return_value=settings),
+        patch.object(srv, "_get_signer", return_value=signer),
+        patch.object(srv, "_get_ledger_cache", return_value=cache),
+    ):
+        result = await srv.operator_status()
+
+    assert result["upstream_supply_sats"] == 3000
+    assert result["upstream_supply_consumed_sats"] == 2000
