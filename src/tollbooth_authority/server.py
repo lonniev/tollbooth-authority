@@ -26,6 +26,7 @@ from tollbooth.tools.credits import (
 
 from tollbooth_authority.certificate import create_certificate_claims
 from tollbooth_authority.config import AuthoritySettings
+from tollbooth_authority.registry import DPYCRegistry, RegistryError
 from tollbooth_authority.replay import ReplayTracker
 from tollbooth_authority.signing import AuthoritySigner
 from tollbooth_authority.vault import TheBrainVault
@@ -203,6 +204,34 @@ def _require_user_id() -> str:
 
 
 # ---------------------------------------------------------------------------
+# DPYC identity (Phase 1 dual-key: Horizon ID or Nostr npub)
+# ---------------------------------------------------------------------------
+
+_dpyc_sessions: dict[str, str] = {}  # Horizon user_id → npub
+_dpyc_registry: DPYCRegistry | None = None
+
+
+def _get_effective_user_id() -> str:
+    """Return npub if DPYC session active, else Horizon user_id (Phase 1 dual-key)."""
+    horizon_id = _require_user_id()
+    return _dpyc_sessions.get(horizon_id, horizon_id)
+
+
+def _get_dpyc_registry() -> DPYCRegistry | None:
+    """Return a DPYCRegistry if enforcement is enabled, else None."""
+    global _dpyc_registry
+    s = _get_settings()
+    if not s.dpyc_enforce_membership:
+        return None
+    if _dpyc_registry is None:
+        _dpyc_registry = DPYCRegistry(
+            url=s.dpyc_registry_url,
+            cache_ttl_seconds=s.dpyc_registry_cache_ttl_seconds,
+        )
+    return _dpyc_registry
+
+
+# ---------------------------------------------------------------------------
 # Shutdown
 # ---------------------------------------------------------------------------
 
@@ -211,7 +240,7 @@ _reconciled_users: set[str] = set()
 
 
 async def _graceful_shutdown() -> None:
-    global _shutdown_triggered, _ledger_cache, _btcpay_client, _vault
+    global _shutdown_triggered, _ledger_cache, _btcpay_client, _vault, _dpyc_registry
     if _shutdown_triggered:
         return
     _shutdown_triggered = True
@@ -234,6 +263,12 @@ async def _graceful_shutdown() -> None:
     if _vault is not None:
         await _vault.close()
         _vault = None
+
+    if _dpyc_registry is not None:
+        await _dpyc_registry.close()
+        _dpyc_registry = None
+
+    _dpyc_sessions.clear()
 
 
 async def _shutdown_flush_and_stop() -> None:
@@ -285,7 +320,7 @@ async def register_operator() -> dict[str, Any]:
 
     Errors: Fails if not authenticated via Horizon (FastMCP Cloud required).
     """
-    user_id = _require_user_id()
+    user_id = _get_effective_user_id()
     cache = _get_ledger_cache()
 
     ledger = await cache.get(user_id)
@@ -335,7 +370,7 @@ async def purchase_tax_credits(
     Errors: Fails if not registered (call register_operator first) or if
     BTCPay is unreachable.
     """
-    user_id = _require_user_id()
+    user_id = _get_effective_user_id()
     btcpay = _get_btcpay()
     cache = _get_ledger_cache()
     s = _get_settings()
@@ -376,7 +411,7 @@ async def check_tax_payment(
 
     Errors: Returns success=False if the invoice_id is invalid or expired.
     """
-    user_id = _require_user_id()
+    user_id = _get_effective_user_id()
     btcpay = _get_btcpay()
     cache = _get_ledger_cache()
     s = _get_settings()
@@ -406,7 +441,7 @@ async def tax_balance() -> dict[str, Any]:
 
     Next step: If balance is low, call purchase_tax_credits to top up.
     """
-    user_id = _require_user_id()
+    user_id = _get_effective_user_id()
     cache = _get_ledger_cache()
     s = _get_settings()
 
@@ -455,7 +490,7 @@ async def operator_status() -> dict[str, Any]:
     The authority_public_key should be hardcoded in your tollbooth-dpyc
     TollboothConfig so the library can verify certificates locally.
     """
-    user_id = _require_user_id()
+    user_id = _get_effective_user_id()
     s = _get_settings()
 
     try:
@@ -484,6 +519,12 @@ async def operator_status() -> dict[str, Any]:
         supply = await cache.get(SUPPLY_USER_ID)
         result["upstream_supply_sats"] = supply.balance_api_sats
         result["upstream_supply_consumed_sats"] = supply.total_consumed_api_sats
+
+    # Surface DPYC identity info when configured
+    if s.dpyc_authority_npub:
+        result["authority_npub"] = s.dpyc_authority_npub
+    if s.dpyc_enforce_membership:
+        result["dpyc_registry_enforcement"] = True
 
     return result
 
@@ -561,6 +602,7 @@ async def certify_purchase(
     cache.mark_dirty(operator_id)
 
     # Non-Prime: debit cert-sats from upstream supply
+    supply = None  # hoisted for rollback access in registry check
     if s.upstream_authority_address:
         supply = await cache.get(SUPPLY_USER_ID)
         if not supply.debit("certify_supply", amount_sats):
@@ -575,12 +617,24 @@ async def certify_purchase(
             }
         cache.mark_dirty(SUPPLY_USER_ID)
 
+    # DPYC registry membership check (fail closed)
+    registry = _get_dpyc_registry()
+    if registry is not None:
+        try:
+            await registry.check_membership(operator_id)
+        except RegistryError as e:
+            ledger.rollback_debit("certify_purchase", tax_sats)
+            if supply is not None:
+                supply.rollback_debit("certify_supply", amount_sats)
+            return {"success": False, "error": f"DPYC membership check failed: {e}"}
+
     # Build and sign certificate
     claims = create_certificate_claims(
         operator_id=operator_id,
         amount_sats=amount_sats,
         tax_sats=tax_sats,
         ttl_seconds=s.certificate_ttl_seconds,
+        authority_npub=s.dpyc_authority_npub,
     )
 
     # Record JTI for anti-replay
@@ -666,6 +720,7 @@ async def refresh_config() -> dict[str, Any]:
     connections are closed. Active requests may see transient errors.
     """
     global _settings, _settings_loaded, _signer, _btcpay_client, _vault, _ledger_cache, _replay_tracker
+    global _dpyc_registry
 
     # Flush before reset
     if _ledger_cache is not None:
@@ -678,6 +733,9 @@ async def refresh_config() -> dict[str, Any]:
     if _vault is not None:
         await _vault.close()
 
+    if _dpyc_registry is not None:
+        await _dpyc_registry.close()
+
     _settings = None
     _settings_loaded = False
     _signer = None
@@ -685,6 +743,8 @@ async def refresh_config() -> dict[str, Any]:
     _vault = None
     _ledger_cache = None
     _replay_tracker = None
+    _dpyc_registry = None
+    _dpyc_sessions.clear()
 
     _ensure_settings_loaded()
 
@@ -692,3 +752,99 @@ async def refresh_config() -> dict[str, Any]:
         "success": True,
         "message": "Configuration reloaded. Singletons will be re-created on next use.",
     }
+
+
+# ---------------------------------------------------------------------------
+# DPYC Identity Tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def activate_dpyc(npub: str) -> dict[str, Any]:
+    """Set your DPYC Nostr identity for this session.
+
+    After activation, all ledger operations (register_operator, purchase_tax_credits,
+    tax_balance, etc.) key on your npub instead of your Horizon user ID.
+
+    Warning: Activating starts a fresh ledger under the npub key. Any existing
+    balance under your Horizon ID remains there — it is not migrated.
+
+    Args:
+        npub: Your Nostr public key in bech32 format (npub1...).
+
+    Returns:
+        success: True if the session was activated.
+        horizon_id: Your underlying Horizon user ID.
+        effective_id: The npub now used for ledger operations.
+    """
+    if not npub.startswith("npub1") or len(npub) < 60:
+        return {
+            "success": False,
+            "error": "Invalid npub format. Must start with 'npub1' and be at least 60 characters.",
+        }
+
+    horizon_id = _require_user_id()
+    _dpyc_sessions[horizon_id] = npub
+
+    return {
+        "success": True,
+        "horizon_id": horizon_id,
+        "effective_id": npub,
+        "message": (
+            "DPYC identity activated. Ledger operations now use your npub. "
+            "Note: this starts a fresh ledger under the npub key."
+        ),
+    }
+
+
+@mcp.tool()
+async def get_dpyc_identity() -> dict[str, Any]:
+    """Return the current DPYC identity state for this session.
+
+    Shows the Horizon user ID, whether a DPYC npub session is active,
+    and the effective ID used for ledger operations.
+
+    Returns:
+        horizon_id: Your Horizon user ID (always present).
+        dpyc_npub: Your DPYC npub if activated, else null.
+        effective_id: The ID currently used for ledger keying.
+        authority_npub: This Authority's DPYC npub (if configured).
+    """
+    horizon_id = _require_user_id()
+    npub = _dpyc_sessions.get(horizon_id)
+    s = _get_settings()
+
+    return {
+        "horizon_id": horizon_id,
+        "dpyc_npub": npub,
+        "effective_id": npub or horizon_id,
+        "authority_npub": s.dpyc_authority_npub or None,
+    }
+
+
+@mcp.tool()
+async def check_dpyc_membership(npub: str) -> dict[str, Any]:
+    """Diagnostic: look up an npub in the DPYC community registry.
+
+    Returns the member record if found and active, or an error message.
+    Works regardless of whether enforcement is enabled.
+
+    Args:
+        npub: The Nostr public key to look up.
+
+    Returns:
+        success: True if the member was found and active.
+        member: The full member record from the registry.
+    """
+    s = _get_settings()
+    registry = DPYCRegistry(
+        url=s.dpyc_registry_url,
+        cache_ttl_seconds=s.dpyc_registry_cache_ttl_seconds,
+    )
+    try:
+        member = await registry.check_membership(npub)
+        return {"success": True, "member": member}
+    except RegistryError as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        await registry.close()

@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives import serialization
 from tollbooth import UserLedger, LedgerCache
 
 from tollbooth_authority.config import AuthoritySettings
+from tollbooth_authority.registry import DPYCRegistry, RegistryError
 from tollbooth_authority.replay import ReplayTracker
 from tollbooth_authority.signing import AuthoritySigner
 
@@ -498,3 +499,361 @@ async def test_operator_status_shows_supply():
 
     assert result["upstream_supply_sats"] == 3000
     assert result["upstream_supply_consumed_sats"] == 2000
+
+
+# ---------------------------------------------------------------------------
+# DPYC Identity Tools
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_activate_dpyc_valid_npub():
+    import tollbooth_authority.server as srv
+
+    npub = "npub1l94pd4qu4eszrl6ek032ftcnsu3tt9a7xvq2zp7eaxeklp6mrpzssmq8pf"
+    with patch.object(srv, "_require_user_id", return_value="horizon-1"):
+        result = await srv.activate_dpyc(npub)
+
+    assert result["success"] is True
+    assert result["horizon_id"] == "horizon-1"
+    assert result["effective_id"] == npub
+    # Clean up
+    srv._dpyc_sessions.clear()
+
+
+@pytest.mark.asyncio
+async def test_activate_dpyc_invalid_format():
+    import tollbooth_authority.server as srv
+
+    with patch.object(srv, "_require_user_id", return_value="horizon-1"):
+        result = await srv.activate_dpyc("not-an-npub")
+
+    assert result["success"] is False
+    assert "Invalid npub" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_get_dpyc_identity_without_session():
+    import tollbooth_authority.server as srv
+
+    settings = _make_settings(dpyc_authority_npub="npub1authority")
+    with (
+        patch.object(srv, "_require_user_id", return_value="horizon-1"),
+        patch.object(srv, "_get_settings", return_value=settings),
+    ):
+        result = await srv.get_dpyc_identity()
+
+    assert result["horizon_id"] == "horizon-1"
+    assert result["dpyc_npub"] is None
+    assert result["effective_id"] == "horizon-1"
+    assert result["authority_npub"] == "npub1authority"
+
+
+@pytest.mark.asyncio
+async def test_get_dpyc_identity_with_session():
+    import tollbooth_authority.server as srv
+
+    npub = "npub1l94pd4qu4eszrl6ek032ftcnsu3tt9a7xvq2zp7eaxeklp6mrpzssmq8pf"
+    srv._dpyc_sessions["horizon-1"] = npub
+    settings = _make_settings(dpyc_authority_npub="")
+
+    with (
+        patch.object(srv, "_require_user_id", return_value="horizon-1"),
+        patch.object(srv, "_get_settings", return_value=settings),
+    ):
+        result = await srv.get_dpyc_identity()
+
+    assert result["dpyc_npub"] == npub
+    assert result["effective_id"] == npub
+    assert result["authority_npub"] is None
+    srv._dpyc_sessions.clear()
+
+
+@pytest.mark.asyncio
+async def test_register_operator_uses_effective_id():
+    """When DPYC session is active, register_operator uses npub."""
+    import tollbooth_authority.server as srv
+
+    npub = "npub1l94pd4qu4eszrl6ek032ftcnsu3tt9a7xvq2zp7eaxeklp6mrpzssmq8pf"
+    srv._dpyc_sessions["horizon-1"] = npub
+
+    ledger = UserLedger(balance_api_sats=0)
+    cache = MagicMock(spec=LedgerCache)
+    cache.get = AsyncMock(return_value=ledger)
+    cache.mark_dirty = MagicMock()
+    cache.flush_user = AsyncMock(return_value=True)
+
+    with (
+        patch.object(srv, "_require_user_id", return_value="horizon-1"),
+        patch.object(srv, "_get_ledger_cache", return_value=cache),
+    ):
+        result = await srv.register_operator()
+
+    assert result["operator_id"] == npub
+    cache.get.assert_called_once_with(npub)
+    srv._dpyc_sessions.clear()
+
+
+# ---------------------------------------------------------------------------
+# DPYC Registry enforcement in certify_purchase
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_certify_purchase_registry_active_member():
+    """Registry enforcement: active member succeeds."""
+    import tollbooth_authority.server as srv
+
+    signer = _make_signer()
+    settings = _make_settings(
+        tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600,
+        dpyc_enforce_membership=True,
+    )
+
+    ledger = UserLedger(balance_api_sats=1000)
+    cache = MagicMock(spec=LedgerCache)
+    cache.get = AsyncMock(return_value=ledger)
+    cache.mark_dirty = MagicMock()
+    cache.flush_user = AsyncMock(return_value=True)
+
+    replay = ReplayTracker(ttl_seconds=600)
+
+    mock_registry = MagicMock(spec=DPYCRegistry)
+    mock_registry.check_membership = AsyncMock(return_value={"npub": "op-1", "status": "active"})
+
+    with (
+        patch.object(srv, "_get_settings", return_value=settings),
+        patch.object(srv, "_get_signer", return_value=signer),
+        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv, "_get_replay_tracker", return_value=replay),
+        patch.object(srv, "_get_dpyc_registry", return_value=mock_registry),
+    ):
+        result = await srv.certify_purchase("op-1", 1000)
+
+    assert result["success"] is True
+    mock_registry.check_membership.assert_called_once_with("op-1")
+
+
+@pytest.mark.asyncio
+async def test_certify_purchase_registry_non_member_rejected():
+    """Registry enforcement: non-member rejected with tax rollback."""
+    import tollbooth_authority.server as srv
+
+    signer = _make_signer()
+    settings = _make_settings(
+        tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600,
+        dpyc_enforce_membership=True,
+    )
+
+    ledger = UserLedger(balance_api_sats=1000)
+    cache = MagicMock(spec=LedgerCache)
+    cache.get = AsyncMock(return_value=ledger)
+    cache.mark_dirty = MagicMock()
+
+    replay = ReplayTracker(ttl_seconds=600)
+
+    mock_registry = MagicMock(spec=DPYCRegistry)
+    mock_registry.check_membership = AsyncMock(side_effect=RegistryError("not found"))
+
+    with (
+        patch.object(srv, "_get_settings", return_value=settings),
+        patch.object(srv, "_get_signer", return_value=signer),
+        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv, "_get_replay_tracker", return_value=replay),
+        patch.object(srv, "_get_dpyc_registry", return_value=mock_registry),
+    ):
+        result = await srv.certify_purchase("op-1", 1000)
+
+    assert result["success"] is False
+    assert "DPYC membership check failed" in result["error"]
+    # Tax should be rolled back
+    assert ledger.balance_api_sats == 1000
+
+
+@pytest.mark.asyncio
+async def test_certify_purchase_registry_unreachable_fails_closed():
+    """Registry unreachable: fails closed with rollback."""
+    import tollbooth_authority.server as srv
+
+    signer = _make_signer()
+    settings = _make_settings(
+        tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600,
+        dpyc_enforce_membership=True,
+    )
+
+    ledger = UserLedger(balance_api_sats=1000)
+    cache = MagicMock(spec=LedgerCache)
+    cache.get = AsyncMock(return_value=ledger)
+    cache.mark_dirty = MagicMock()
+
+    replay = ReplayTracker(ttl_seconds=600)
+
+    mock_registry = MagicMock(spec=DPYCRegistry)
+    mock_registry.check_membership = AsyncMock(side_effect=RegistryError("fetch failed"))
+
+    with (
+        patch.object(srv, "_get_settings", return_value=settings),
+        patch.object(srv, "_get_signer", return_value=signer),
+        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv, "_get_replay_tracker", return_value=replay),
+        patch.object(srv, "_get_dpyc_registry", return_value=mock_registry),
+    ):
+        result = await srv.certify_purchase("op-1", 1000)
+
+    assert result["success"] is False
+    assert "fetch failed" in result["error"]
+    assert ledger.balance_api_sats == 1000
+
+
+@pytest.mark.asyncio
+async def test_certify_purchase_enforcement_disabled_no_check():
+    """Enforcement disabled: no registry check, certification proceeds."""
+    import tollbooth_authority.server as srv
+
+    signer = _make_signer()
+    settings = _make_settings(
+        tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600,
+        dpyc_enforce_membership=False,
+    )
+
+    ledger = UserLedger(balance_api_sats=1000)
+    cache = MagicMock(spec=LedgerCache)
+    cache.get = AsyncMock(return_value=ledger)
+    cache.mark_dirty = MagicMock()
+    cache.flush_user = AsyncMock(return_value=True)
+
+    replay = ReplayTracker(ttl_seconds=600)
+
+    with (
+        patch.object(srv, "_get_settings", return_value=settings),
+        patch.object(srv, "_get_signer", return_value=signer),
+        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv, "_get_replay_tracker", return_value=replay),
+        patch.object(srv, "_get_dpyc_registry", return_value=None),
+    ):
+        result = await srv.certify_purchase("op-1", 1000)
+
+    assert result["success"] is True
+
+
+# ---------------------------------------------------------------------------
+# authority_npub in JWT claims
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_certify_purchase_includes_authority_npub():
+    """JWT includes authority_npub when configured."""
+    import tollbooth_authority.server as srv
+
+    signer = _make_signer()
+    settings = _make_settings(
+        tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600,
+        dpyc_authority_npub="npub1authority_test",
+    )
+
+    ledger = UserLedger(balance_api_sats=1000)
+    cache = MagicMock(spec=LedgerCache)
+    cache.get = AsyncMock(return_value=ledger)
+    cache.mark_dirty = MagicMock()
+    cache.flush_user = AsyncMock(return_value=True)
+
+    replay = ReplayTracker(ttl_seconds=600)
+
+    with (
+        patch.object(srv, "_get_settings", return_value=settings),
+        patch.object(srv, "_get_signer", return_value=signer),
+        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv, "_get_replay_tracker", return_value=replay),
+        patch.object(srv, "_get_dpyc_registry", return_value=None),
+    ):
+        result = await srv.certify_purchase("op-1", 1000)
+
+    assert result["success"] is True
+    # Decode the JWT to verify authority_npub claim
+    import jwt
+    token = result["certificate"]
+    claims = jwt.decode(token, options={"verify_signature": False})
+    assert claims["authority_npub"] == "npub1authority_test"
+
+
+@pytest.mark.asyncio
+async def test_certify_purchase_omits_authority_npub_when_empty():
+    """JWT omits authority_npub when not configured."""
+    import tollbooth_authority.server as srv
+
+    signer = _make_signer()
+    settings = _make_settings(
+        tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600,
+        dpyc_authority_npub="",
+    )
+
+    ledger = UserLedger(balance_api_sats=1000)
+    cache = MagicMock(spec=LedgerCache)
+    cache.get = AsyncMock(return_value=ledger)
+    cache.mark_dirty = MagicMock()
+    cache.flush_user = AsyncMock(return_value=True)
+
+    replay = ReplayTracker(ttl_seconds=600)
+
+    with (
+        patch.object(srv, "_get_settings", return_value=settings),
+        patch.object(srv, "_get_signer", return_value=signer),
+        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv, "_get_replay_tracker", return_value=replay),
+        patch.object(srv, "_get_dpyc_registry", return_value=None),
+    ):
+        result = await srv.certify_purchase("op-1", 1000)
+
+    assert result["success"] is True
+    import jwt
+    token = result["certificate"]
+    claims = jwt.decode(token, options={"verify_signature": False})
+    assert "authority_npub" not in claims
+
+
+@pytest.mark.asyncio
+async def test_check_dpyc_membership_found():
+    """check_dpyc_membership returns member record when found."""
+    import tollbooth_authority.server as srv
+
+    settings = _make_settings()
+    mock_registry_cls = MagicMock()
+    mock_instance = MagicMock(spec=DPYCRegistry)
+    mock_instance.check_membership = AsyncMock(return_value={"npub": "npub1test", "status": "active"})
+    mock_instance.close = AsyncMock()
+
+    with (
+        patch.object(srv, "_get_settings", return_value=settings),
+        patch("tollbooth_authority.server.DPYCRegistry", return_value=mock_instance),
+    ):
+        result = await srv.check_dpyc_membership("npub1test")
+
+    assert result["success"] is True
+    assert result["member"]["status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_operator_status_shows_dpyc_info():
+    """operator_status surfaces DPYC info when configured."""
+    import tollbooth_authority.server as srv
+
+    signer = _make_signer()
+    settings = _make_settings(
+        dpyc_authority_npub="npub1authority_test",
+        dpyc_enforce_membership=True,
+    )
+    ledger = UserLedger(balance_api_sats=500, total_deposited_api_sats=1000, total_consumed_api_sats=500)
+    cache = MagicMock(spec=LedgerCache)
+    cache.get = AsyncMock(return_value=ledger)
+
+    with (
+        patch.object(srv, "_require_user_id", return_value="op-1"),
+        patch.object(srv, "_get_settings", return_value=settings),
+        patch.object(srv, "_get_signer", return_value=signer),
+        patch.object(srv, "_get_ledger_cache", return_value=cache),
+    ):
+        result = await srv.operator_status()
+
+    assert result["authority_npub"] == "npub1authority_test"
+    assert result["dpyc_registry_enforcement"] is True
