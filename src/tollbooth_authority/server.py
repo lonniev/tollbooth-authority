@@ -378,6 +378,9 @@ async def check_tax_payment(
         btcpay, cache, user_id, invoice_id,
         tier_config_json=s.btcpay_tier_config,
         user_tiers_json=s.btcpay_user_tiers,
+        royalty_address=s.upstream_authority_address or None,
+        royalty_percent=s.upstream_tax_percent / 100,
+        royalty_min_sats=s.upstream_tax_min_sats,
     )
 
 
@@ -446,6 +449,7 @@ async def operator_status() -> dict[str, Any]:
     TollboothConfig so the library can verify certificates locally.
     """
     user_id = _require_user_id()
+    s = _get_settings()
 
     try:
         signer = _get_signer()
@@ -456,7 +460,7 @@ async def operator_status() -> dict[str, Any]:
     cache = _get_ledger_cache()
     ledger = await cache.get(user_id)
 
-    return {
+    result: dict[str, Any] = {
         "operator_id": user_id,
         "registered": True,
         "balance_sats": ledger.balance_api_sats,
@@ -464,6 +468,13 @@ async def operator_status() -> dict[str, Any]:
         "total_consumed_sats": ledger.total_consumed_api_sats,
         "authority_public_key": public_key_pem,
     }
+
+    # Surface upstream chain config so operators can see the authority hierarchy
+    if s.upstream_authority_address:
+        result["upstream_authority_address"] = s.upstream_authority_address
+        result["upstream_tax_percent"] = s.upstream_tax_percent
+
+    return result
 
 
 @mcp.tool()
