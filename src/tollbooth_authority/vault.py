@@ -16,7 +16,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-_BASE_URL = "https://api.thebrain.com"
+_BASE_URL = "https://api.bra.in"
 
 
 class TheBrainVault:
