@@ -82,7 +82,11 @@ class TheBrainVault:
     async def _create_thought(
         self, name: str, parent_id: str
     ) -> dict[str, Any]:
-        """Create a child thought. Returns ``{"id": "..."}``."""
+        """Create a child thought. Returns ``{"id": "..."}``.
+
+        TheBrain API may return HTTP 500 on successful creates, so we
+        check for an ``id`` field in the response body before raising.
+        """
         resp = await self._client.post(
             f"/thoughts/{self._brain_id}",
             json={
@@ -93,8 +97,15 @@ class TheBrainVault:
                 "relation": 1,  # Child
             },
         )
+        try:
+            data = resp.json()
+        except Exception:
+            resp.raise_for_status()
+            return {}
+        if "id" in data:
+            return data
         resp.raise_for_status()
-        return resp.json()
+        return data
 
     async def _get_children(self, thought_id: str) -> list[dict[str, Any]]:
         """Get a thought's children via the graph endpoint."""
