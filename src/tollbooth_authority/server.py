@@ -607,6 +607,12 @@ async def operator_status() -> dict[str, Any]:
     if s.dpyc_enforce_membership:
         result["dpyc_registry_enforcement"] = True
 
+    # Vault health diagnostics
+    result["vault_configured"] = bool(
+        s.thebrain_api_key and s.thebrain_vault_brain_id and s.thebrain_vault_home_id
+    )
+    result["cache_health"] = cache.health()
+
     return result
 
 
