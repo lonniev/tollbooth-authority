@@ -94,6 +94,10 @@ async def test_certify_purchase_success():
     assert result["net_sats"] == 980
     cache.mark_dirty.assert_called_once_with("op-1")
     cache.flush_user.assert_called_once_with("op-1")
+    # Verify dpyc_protocol claim in JWT
+    import jwt
+    claims = jwt.decode(result["certificate"], options={"verify_signature": False})
+    assert claims["dpyc_protocol"] == "dpyp-01-base-certificate"
 
 
 @pytest.mark.asyncio

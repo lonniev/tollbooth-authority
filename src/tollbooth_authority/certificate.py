@@ -27,6 +27,7 @@ def create_certificate_claims(
         "amount_sats": amount_sats,
         "tax_paid_sats": tax_sats,
         "net_sats": amount_sats - tax_sats,
+        "dpyc_protocol": "dpyp-01-base-certificate",
     }
     if authority_npub:
         claims["authority_npub"] = authority_npub
