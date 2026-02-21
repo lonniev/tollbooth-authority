@@ -62,21 +62,22 @@ class TheBrainVault:
         """Fetch a thought's note as markdown. Returns None on failure."""
         try:
             resp = await self._client.get(
-                f"/thoughts/{self._brain_id}/{thought_id}/notes/markdown"
+                f"/notes/{self._brain_id}/{thought_id}"
             )
             if resp.status_code == 200:
-                return resp.text or None
+                data = resp.json()
+                return data.get("markdown") or None
         except httpx.HTTPError:
             logger.warning("Failed to read note for thought %s", thought_id)
         return None
 
     async def _set_note(self, thought_id: str, markdown: str) -> None:
         """Create or update a thought's note."""
-        await self._client.post(
-            f"/thoughts/{self._brain_id}/{thought_id}/notes/markdown",
-            content=markdown,
-            headers={"Content-Type": "text/plain"},
+        resp = await self._client.post(
+            f"/notes/{self._brain_id}/{thought_id}/update",
+            json={"markdown": markdown},
         )
+        resp.raise_for_status()
 
     async def _create_thought(
         self, name: str, parent_id: str
