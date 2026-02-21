@@ -74,7 +74,30 @@ mcp = FastMCP(
         "The Authority signs certificates with an Ed25519 key. Generate one with "
         "`python scripts/generate_keypair.py`. The private key goes in "
         "AUTHORITY_SIGNING_KEY; the public key is hardcoded in tollbooth-dpyc "
-        "for verification.\n"
+        "for verification.\n\n"
+        "## Deployment Configuration — Persistence & Tiers\n\n"
+        "The Authority's operator tax balances are stored in a persistent vault so "
+        "they survive process restarts and redeployments. **The vault is pluggable** — "
+        "this reference deployment uses TheBrain as its vault store, but other "
+        "implementations could use Redis, SQLite, S3, or any key-value store.\n\n"
+        "The env vars below are **specific to the TheBrainVault implementation**. "
+        "An Authority using a different vault backend would need different env vars "
+        "matching its store's connection requirements. When advising a human operator "
+        "on deployment, always check which vault implementation the Authority uses "
+        "(see `vault.py`) and ask for the corresponding credentials.\n\n"
+        "### TheBrainVault env vars (this implementation)\n\n"
+        "- `THEBRAIN_API_KEY` — API key for TheBrain cloud (https://api.bra.in)\n"
+        "- `THEBRAIN_VAULT_BRAIN_ID` — Brain ID containing the vault home thought\n"
+        "- `THEBRAIN_VAULT_HOME_ID` — Thought ID serving as the vault index root\n\n"
+        "Without these three vars, the vault is disabled and balances reset on every "
+        "restart. All three must be set together.\n\n"
+        "### VIP tier env vars (optional)\n\n"
+        "- `BTCPAY_TIER_CONFIG` — JSON mapping tier names to multipliers, "
+        'e.g., `{"vip": {"multiplier": 100000}}`\n'
+        "- `BTCPAY_USER_TIERS` — JSON mapping operator npubs to tier names, "
+        'e.g., `{"npub1abc...": "vip"}`\n\n'
+        "These grant trusted operators a credit multiplier on tax purchases. "
+        "If unset, all operators receive the default 1x multiplier.\n"
     ),
 )
 
