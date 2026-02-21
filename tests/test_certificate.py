@@ -16,6 +16,12 @@ def test_fields_populated():
     assert "jti" in claims
     assert "iat" in claims
     assert "exp" in claims
+    assert "dpyc_protocol" in claims
+
+
+def test_dpyc_protocol_value():
+    claims = create_certificate_claims("op-1", 1000, 20)
+    assert claims["dpyc_protocol"] == "dpyp-01-base-certificate"
 
 
 def test_unique_jti():
