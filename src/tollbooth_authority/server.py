@@ -29,7 +29,7 @@ from tollbooth_authority.config import AuthoritySettings
 from tollbooth_authority.registry import DPYCRegistry, RegistryError
 from tollbooth_authority.replay import ReplayTracker
 from tollbooth_authority.signing import AuthoritySigner
-from tollbooth_authority.vault import TheBrainVault
+from tollbooth.vaults import TheBrainVault
 
 # ---------------------------------------------------------------------------
 # FastMCP app

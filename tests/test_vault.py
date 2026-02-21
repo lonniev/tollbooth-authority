@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from tollbooth_authority.vault import TheBrainVault
+from tollbooth.vaults import TheBrainVault
 
 
 def _mock_response(status: int = 200, json_data: dict | None = None, text: str = "") -> httpx.Response:
