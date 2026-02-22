@@ -898,3 +898,21 @@ async def test_operator_status_shows_dpyc_info():
 
     assert result["authority_npub"] == "npub1authority_test"
     assert result["dpyc_registry_enforcement"] is True
+
+
+# ---------------------------------------------------------------------------
+# service_status
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_service_status():
+    import tollbooth_authority.server as srv
+
+    result = await srv.service_status()
+    assert result["service"] == "tollbooth-authority"
+    versions = result["versions"]
+    assert "tollbooth_authority" in versions
+    assert "python" in versions
+    assert "tollbooth_dpyc" in versions
+    assert "fastmcp" in versions
