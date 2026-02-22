@@ -96,7 +96,6 @@ To run your own Authority instance, set these environment variables:
 | `tax_balance` | Check your current tax balance, total deposited, total consumed, and pending invoices. |
 | `operator_status` | View your registration status, balance summary, and the Authority's Ed25519 public key. |
 | `certify_purchase` | The core machine-to-machine tool. Deducts tax and returns an EdDSA-signed JWT certificate. |
-| `refresh_config` | Hot-reload environment variables without redeploying the service. |
 
 ## Development
 

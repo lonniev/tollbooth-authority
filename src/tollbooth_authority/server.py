@@ -68,7 +68,6 @@ mcp = FastMCP(
         "- `tax_balance` — Read-only balance check. No side effects.\n"
         "- `operator_status` — Registration info + Authority public key for JWT verification.\n"
         "- `certify_purchase` — Core machine-to-machine tool. Deducts tax, returns signed JWT.\n"
-        "- `refresh_config` — Admin tool. Hot-reloads env vars without redeploy.\n\n"
         "## Low-Balance Recovery\n\n"
         "If `certify_purchase` returns 'Insufficient tax balance', the operator must "
         "fund more credits: call `purchase_tax_credits`, pay, then `check_tax_payment`. "
@@ -813,57 +812,6 @@ async def report_upstream_purchase(
         "success": True,
         "supply_balance_sats": supply.balance_api_sats,
         "credited_sats": amount_sats,
-    }
-
-
-@mcp.tool()
-async def refresh_config() -> dict[str, Any]:
-    """Hot-reload environment variables without redeploying the service.
-
-    Admin-only tool. Flushes all dirty ledger entries to persistent storage,
-    closes BTCPay and vault connections, then resets all singletons so they
-    pick up new env vars on next use. Use after updating env vars in the
-    FastMCP Cloud dashboard.
-
-    Returns:
-        success: True if reload completed.
-        message: Confirmation that singletons will be re-created on next use.
-
-    Warning: Causes a brief interruption — all cached state is flushed and
-    connections are closed. Active requests may see transient errors.
-    """
-    global _settings, _settings_loaded, _signer, _btcpay_client, _vault, _ledger_cache, _replay_tracker
-    global _dpyc_registry
-
-    # Flush before reset
-    if _ledger_cache is not None:
-        await _ledger_cache.flush_all()
-        await _ledger_cache.stop()
-
-    if _btcpay_client is not None:
-        await _btcpay_client.close()
-
-    if _vault is not None:
-        await _vault.close()
-
-    if _dpyc_registry is not None:
-        await _dpyc_registry.close()
-
-    _settings = None
-    _settings_loaded = False
-    _signer = None
-    _btcpay_client = None
-    _vault = None
-    _ledger_cache = None
-    _replay_tracker = None
-    _dpyc_registry = None
-    _dpyc_sessions.clear()
-
-    _ensure_settings_loaded()
-
-    return {
-        "success": True,
-        "message": "Configuration reloaded. Singletons will be re-created on next use.",
     }
 
 
