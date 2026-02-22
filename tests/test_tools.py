@@ -20,6 +20,14 @@ from tollbooth_authority.signing import AuthoritySigner
 SAMPLE_NPUB = "npub1l94pd4qu4eszrl6ek032ftcnsu3tt9a7xvq2zp7eaxeklp6mrpzssmq8pf"
 
 
+def _ledger_with_balance(sats: int, **kwargs) -> UserLedger:
+    """Create a UserLedger with the given balance via a tranche deposit."""
+    ledger = UserLedger(**kwargs)
+    if sats > 0:
+        ledger.credit_deposit(sats, "test-seed")
+    return ledger
+
+
 @pytest.fixture(autouse=True)
 def _clean_dpyc_sessions():
     """Ensure DPYC sessions are clean before and after each test."""
@@ -70,7 +78,7 @@ async def test_certify_purchase_success():
     settings = _make_settings(tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600)
 
     # Mock ledger with sufficient balance
-    ledger = UserLedger(balance_api_sats=1000)
+    ledger = _ledger_with_balance(1000)
     cache = MagicMock(spec=LedgerCache)
     cache.get = AsyncMock(return_value=ledger)
     cache.mark_dirty = MagicMock()
@@ -109,7 +117,7 @@ async def test_certify_purchase_insufficient_balance():
     settings = _make_settings(tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600)
 
     # Mock ledger with zero balance
-    ledger = UserLedger(balance_api_sats=0)
+    ledger = UserLedger()
     cache = MagicMock(spec=LedgerCache)
     cache.get = AsyncMock(return_value=ledger)
 
@@ -155,7 +163,7 @@ async def test_certify_purchase_applies_minimum_tax():
     settings = _make_settings(tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600)
 
     # For amount=100: ceil(100 * 2.0 / 100) = 2 < min_sats=10, so tax=10
-    ledger = UserLedger(balance_api_sats=500)
+    ledger = _ledger_with_balance(500)
     cache = MagicMock(spec=LedgerCache)
     cache.get = AsyncMock(return_value=ledger)
     cache.mark_dirty = MagicMock()
@@ -185,7 +193,7 @@ async def test_certify_purchase_applies_minimum_tax():
 async def test_register_operator():
     import tollbooth_authority.server as srv
 
-    ledger = UserLedger(balance_api_sats=0)
+    ledger = UserLedger()
     cache = MagicMock(spec=LedgerCache)
     cache.get = AsyncMock(return_value=ledger)
     cache.mark_dirty = MagicMock()
@@ -215,7 +223,9 @@ async def test_operator_status():
 
     signer = _make_signer()
     settings = _make_settings()
-    ledger = UserLedger(balance_api_sats=500, total_deposited_api_sats=1000, total_consumed_api_sats=500)
+    ledger = UserLedger()
+    ledger.credit_deposit(1000, "test-seed")
+    ledger.debit("spend", 500)
     cache = MagicMock(spec=LedgerCache)
     cache.get = AsyncMock(return_value=ledger)
 
@@ -248,7 +258,9 @@ async def test_operator_status_shows_upstream():
         upstream_authority_address="upstream@btcpay.example.com",
         upstream_tax_percent=3.0,
     )
-    ledger = UserLedger(balance_api_sats=500, total_deposited_api_sats=1000, total_consumed_api_sats=500)
+    ledger = UserLedger()
+    ledger.credit_deposit(1000, "test-seed")
+    ledger.debit("spend", 500)
     cache = MagicMock(spec=LedgerCache)
     cache.get = AsyncMock(return_value=ledger)
 
@@ -350,8 +362,8 @@ async def test_certify_purchase_deducts_supply():
         upstream_authority_address="upstream@example.com",
     )
 
-    operator_ledger = UserLedger(balance_api_sats=1000)
-    supply_ledger = UserLedger(balance_api_sats=5000)
+    operator_ledger = _ledger_with_balance(1000)
+    supply_ledger = _ledger_with_balance(5000)
 
     async def fake_get(user_id: str) -> UserLedger:
         if user_id == srv.SUPPLY_USER_ID:
@@ -391,8 +403,8 @@ async def test_certify_purchase_insufficient_supply():
         upstream_authority_address="upstream@example.com",
     )
 
-    operator_ledger = UserLedger(balance_api_sats=1000)
-    supply_ledger = UserLedger(balance_api_sats=500)  # Not enough for 1000
+    operator_ledger = _ledger_with_balance(1000)
+    supply_ledger = _ledger_with_balance(500)  # Not enough for 1000
 
     async def fake_get(user_id: str) -> UserLedger:
         if user_id == srv.SUPPLY_USER_ID:
@@ -433,7 +445,7 @@ async def test_certify_purchase_prime_skips_supply():
         upstream_authority_address="",  # Prime
     )
 
-    operator_ledger = UserLedger(balance_api_sats=1000)
+    operator_ledger = _ledger_with_balance(1000)
 
     cache = MagicMock(spec=LedgerCache)
     cache.get = AsyncMock(return_value=operator_ledger)
@@ -460,7 +472,7 @@ async def test_report_upstream_purchase_credits_supply():
     """report_upstream_purchase credits the supply ledger and returns new balance."""
     import tollbooth_authority.server as srv
 
-    supply_ledger = UserLedger(balance_api_sats=500)
+    supply_ledger = _ledger_with_balance(500)
 
     cache = MagicMock(spec=LedgerCache)
     cache.get = AsyncMock(return_value=supply_ledger)
@@ -501,12 +513,12 @@ async def test_operator_status_shows_supply():
         upstream_tax_percent=3.0,
     )
 
-    operator_ledger = UserLedger(
-        balance_api_sats=500, total_deposited_api_sats=1000, total_consumed_api_sats=500,
-    )
-    supply_ledger = UserLedger(
-        balance_api_sats=3000, total_consumed_api_sats=2000,
-    )
+    operator_ledger = UserLedger()
+    operator_ledger.credit_deposit(1000, "test-seed")
+    operator_ledger.debit("spend", 500)
+    supply_ledger = UserLedger()
+    supply_ledger.credit_deposit(5000, "test-seed")
+    supply_ledger.debit("spend", 2000)
 
     async def fake_get(user_id: str) -> UserLedger:
         if user_id == srv.SUPPLY_USER_ID:
@@ -577,7 +589,7 @@ async def test_register_operator_auto_activates_dpyc():
     """register_operator auto-activates DPYC session for the Horizon user."""
     import tollbooth_authority.server as srv
 
-    ledger = UserLedger(balance_api_sats=0)
+    ledger = UserLedger()
     cache = MagicMock(spec=LedgerCache)
     cache.get = AsyncMock(return_value=ledger)
     cache.mark_dirty = MagicMock()
@@ -601,7 +613,7 @@ async def test_register_operator_uses_npub_for_ledger():
     """register_operator uses the provided npub as ledger key."""
     import tollbooth_authority.server as srv
 
-    ledger = UserLedger(balance_api_sats=42)
+    ledger = _ledger_with_balance(42)
     cache = MagicMock(spec=LedgerCache)
     cache.get = AsyncMock(return_value=ledger)
     cache.mark_dirty = MagicMock()
@@ -649,7 +661,7 @@ async def test_certify_purchase_registry_active_member():
         dpyc_enforce_membership=True,
     )
 
-    ledger = UserLedger(balance_api_sats=1000)
+    ledger = _ledger_with_balance(1000)
     cache = MagicMock(spec=LedgerCache)
     cache.get = AsyncMock(return_value=ledger)
     cache.mark_dirty = MagicMock()
@@ -684,7 +696,7 @@ async def test_certify_purchase_registry_non_member_rejected():
         dpyc_enforce_membership=True,
     )
 
-    ledger = UserLedger(balance_api_sats=1000)
+    ledger = _ledger_with_balance(1000)
     cache = MagicMock(spec=LedgerCache)
     cache.get = AsyncMock(return_value=ledger)
     cache.mark_dirty = MagicMock()
@@ -720,7 +732,7 @@ async def test_certify_purchase_registry_unreachable_fails_closed():
         dpyc_enforce_membership=True,
     )
 
-    ledger = UserLedger(balance_api_sats=1000)
+    ledger = _ledger_with_balance(1000)
     cache = MagicMock(spec=LedgerCache)
     cache.get = AsyncMock(return_value=ledger)
     cache.mark_dirty = MagicMock()
@@ -755,7 +767,7 @@ async def test_certify_purchase_enforcement_disabled_no_check():
         dpyc_enforce_membership=False,
     )
 
-    ledger = UserLedger(balance_api_sats=1000)
+    ledger = _ledger_with_balance(1000)
     cache = MagicMock(spec=LedgerCache)
     cache.get = AsyncMock(return_value=ledger)
     cache.mark_dirty = MagicMock()
@@ -791,7 +803,7 @@ async def test_certify_purchase_includes_authority_npub():
         dpyc_authority_npub="npub1authority_test",
     )
 
-    ledger = UserLedger(balance_api_sats=1000)
+    ledger = _ledger_with_balance(1000)
     cache = MagicMock(spec=LedgerCache)
     cache.get = AsyncMock(return_value=ledger)
     cache.mark_dirty = MagicMock()
@@ -827,7 +839,7 @@ async def test_certify_purchase_omits_authority_npub_when_empty():
         dpyc_authority_npub="",
     )
 
-    ledger = UserLedger(balance_api_sats=1000)
+    ledger = _ledger_with_balance(1000)
     cache = MagicMock(spec=LedgerCache)
     cache.get = AsyncMock(return_value=ledger)
     cache.mark_dirty = MagicMock()
@@ -882,7 +894,9 @@ async def test_operator_status_shows_dpyc_info():
         dpyc_authority_npub="npub1authority_test",
         dpyc_enforce_membership=True,
     )
-    ledger = UserLedger(balance_api_sats=500, total_deposited_api_sats=1000, total_consumed_api_sats=500)
+    ledger = UserLedger()
+    ledger.credit_deposit(1000, "test-seed")
+    ledger.debit("spend", 500)
     cache = MagicMock(spec=LedgerCache)
     cache.get = AsyncMock(return_value=ledger)
 

@@ -449,6 +449,7 @@ async def purchase_tax_credits(
         btcpay, cache, user_id, amount_sats,
         tier_config_json=s.btcpay_tier_config,
         user_tiers_json=s.btcpay_user_tiers,
+        default_credit_ttl_seconds=None,  # Authority balances never expire
     )
 
 
@@ -494,6 +495,7 @@ async def check_tax_payment(
         btcpay, cache, user_id, invoice_id,
         tier_config_json=s.btcpay_tier_config,
         user_tiers_json=s.btcpay_user_tiers,
+        default_credit_ttl_seconds=None,  # Authority balances never expire
         royalty_address=s.upstream_authority_address or None,
         royalty_percent=s.upstream_tax_percent / 100,
         royalty_min_sats=s.upstream_tax_min_sats,
@@ -533,6 +535,7 @@ async def tax_balance() -> dict[str, Any]:
                 btcpay, cache, user_id,
                 tier_config_json=s.btcpay_tier_config,
                 user_tiers_json=s.btcpay_user_tiers,
+                default_credit_ttl_seconds=None,  # Authority balances never expire
             )
             if recon["reconciled"] > 0:
                 logger.info(
@@ -546,6 +549,7 @@ async def tax_balance() -> dict[str, Any]:
         cache, user_id,
         tier_config_json=s.btcpay_tier_config,
         user_tiers_json=s.btcpay_user_tiers,
+        default_credit_ttl_seconds=None,  # Authority balances never expire
     )
 
 
