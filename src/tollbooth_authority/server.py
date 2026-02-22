@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.metadata
 import logging
 import math
+import platform
 import signal
 import sys
 from datetime import datetime, timezone
@@ -24,6 +26,7 @@ from tollbooth.tools.credits import (
     purchase_tax_credits_tool,
 )
 
+from tollbooth_authority import __version__
 from tollbooth_authority.certificate import create_certificate_claims
 from tollbooth_authority.config import AuthoritySettings
 from tollbooth_authority.registry import DPYCRegistry, RegistryError
@@ -614,6 +617,29 @@ async def operator_status() -> dict[str, Any]:
     result["cache_health"] = cache.health()
 
     return result
+
+
+@mcp.tool()
+async def service_status() -> dict[str, Any]:
+    """Diagnostic: report this service's software versions and runtime info.
+
+    Free, unauthenticated. Use to verify deployment versions across the
+    DPYC ecosystem.
+    """
+    versions: dict[str, str] = {
+        "tollbooth_authority": __version__,
+        "python": platform.python_version(),
+    }
+    for pkg in ("tollbooth-dpyc", "fastmcp"):
+        try:
+            versions[pkg.replace("-", "_")] = importlib.metadata.version(pkg)
+        except importlib.metadata.PackageNotFoundError:
+            versions[pkg.replace("-", "_")] = "unknown"
+
+    return {
+        "service": "tollbooth-authority",
+        "versions": versions,
+    }
 
 
 @mcp.tool()
