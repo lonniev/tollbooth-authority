@@ -43,6 +43,14 @@ class AuthoritySettings(BaseSettings):
     dpyc_authority_npub: str = ""
     dpyc_upstream_authority_npub: str = ""
 
+    # NeonVault (replaces TheBrainVault for ledger persistence)
+    neon_database_url: str = ""
+
+    # Nostr audit (optional — enabled when all 3 are set)
+    tollbooth_nostr_audit_enabled: str = ""
+    tollbooth_nostr_operator_nsec: str = ""
+    tollbooth_nostr_relays: str = ""
+
     # DPYC Registry enforcement
     dpyc_registry_url: str = "https://raw.githubusercontent.com/lonniev/dpyc-community/main/members.json"
     dpyc_registry_cache_ttl_seconds: int = 300
