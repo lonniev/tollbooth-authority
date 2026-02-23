@@ -19,7 +19,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "PyJWT>=2.8.0",
     "cryptography>=42.0.0",
-    "tollbooth-dpyc>=0.1.17",
+    "tollbooth-dpyc[nostr]>=0.1.21",
 ]
 
 [project.optional-dependencies]

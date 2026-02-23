@@ -134,7 +134,7 @@ def _get_settings() -> AuthoritySettings:
 
 _signer: AuthoritySigner | None = None
 _btcpay_client: BTCPayClient | None = None
-_vault: TheBrainVault | None = None
+_vault: Any = None
 _ledger_cache: LedgerCache | None = None
 _replay_tracker: ReplayTracker | None = None
 
@@ -165,21 +165,49 @@ def _get_btcpay() -> BTCPayClient:
     return _btcpay_client
 
 
-def _get_vault() -> TheBrainVault:
+def _get_vault() -> Any:
     global _vault
     if _vault is not None:
         return _vault
     s = _get_settings()
-    if not s.thebrain_api_key or not s.thebrain_vault_brain_id or not s.thebrain_vault_home_id:
-        raise ValueError(
-            "Vault not configured. Set THEBRAIN_API_KEY, THEBRAIN_VAULT_BRAIN_ID, THEBRAIN_VAULT_HOME_ID."
+
+    # Primary: NeonVault (if configured)
+    if s.neon_database_url:
+        from tollbooth.vaults import NeonVault
+
+        vault: Any = NeonVault(database_url=s.neon_database_url)
+        # ensure_schema is idempotent — safe on every cold start
+        try:
+            asyncio.ensure_future(vault.ensure_schema())
+        except RuntimeError:
+            pass  # No running event loop yet (e.g. during test setup)
+        logger.info("NeonVault initialized for operator ledger persistence.")
+    else:
+        # Fallback: TheBrainVault (legacy)
+        if not s.thebrain_api_key or not s.thebrain_vault_brain_id or not s.thebrain_vault_home_id:
+            raise ValueError(
+                "Vault not configured. Set NEON_DATABASE_URL (preferred) "
+                "or THEBRAIN_API_KEY + THEBRAIN_VAULT_BRAIN_ID + THEBRAIN_VAULT_HOME_ID (legacy)."
+            )
+        vault = TheBrainVault(
+            api_key=s.thebrain_api_key,
+            brain_id=s.thebrain_vault_brain_id,
+            home_thought_id=s.thebrain_vault_home_id,
         )
-    _vault = TheBrainVault(
-        api_key=s.thebrain_api_key,
-        brain_id=s.thebrain_vault_brain_id,
-        home_thought_id=s.thebrain_vault_home_id,
-    )
-    logger.info("TheBrain vault initialized for operator ledger persistence.")
+        logger.info("TheBrainVault initialized for operator ledger persistence (legacy fallback).")
+
+    # Optional: Nostr audit decorator
+    if s.tollbooth_nostr_audit_enabled == "true":
+        from tollbooth.nostr_audit import AuditedVault, NostrAuditPublisher
+
+        publisher = NostrAuditPublisher(
+            operator_nsec=s.tollbooth_nostr_operator_nsec,
+            relays=[r.strip() for r in s.tollbooth_nostr_relays.split(",") if r.strip()],
+        )
+        vault = AuditedVault(vault, publisher)
+        logger.info("Nostr audit enabled — publishing to %s", s.tollbooth_nostr_relays)
+
+    _vault = vault
     return _vault
 
 
@@ -298,7 +326,9 @@ async def _graceful_shutdown() -> None:
         _btcpay_client = None
 
     if _vault is not None:
-        await _vault.close()
+        _closer = getattr(_vault, "close", None)
+        if _closer is not None:
+            await _closer()
         _vault = None
 
     if _dpyc_registry is not None:
@@ -614,9 +644,10 @@ async def operator_status() -> dict[str, Any]:
         result["dpyc_registry_enforcement"] = True
 
     # Vault health diagnostics
-    result["vault_configured"] = bool(
+    result["vault_configured"] = bool(s.neon_database_url) or bool(
         s.thebrain_api_key and s.thebrain_vault_brain_id and s.thebrain_vault_home_id
     )
+    result["vault_backend"] = "neon" if s.neon_database_url else "thebrain"
     result["cache_health"] = cache.health()
 
     return result
