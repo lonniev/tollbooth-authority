@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pydantic_settings import BaseSettings
 
+from tollbooth import ToolPricing
+
 
 class AuthoritySettings(BaseSettings):
     """All env vars for the Tollbooth Authority service."""
@@ -57,3 +59,12 @@ class AuthoritySettings(BaseSettings):
     dpyc_enforce_membership: bool = False  # opt-in; safe default
 
     model_config = {"env_file": ".env", "extra": "ignore"}
+
+    @property
+    def certify_pricing(self) -> ToolPricing:
+        """ToolPricing instance built from existing tax env vars."""
+        return ToolPricing(
+            rate_percent=self.tax_rate_percent,
+            rate_param="amount_sats",
+            min_cost=self.tax_min_sats,
+        )
