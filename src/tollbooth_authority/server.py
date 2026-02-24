@@ -840,6 +840,23 @@ async def report_upstream_purchase(
     if amount_sats <= 0:
         return {"success": False, "error": "amount_sats must be positive."}
 
+    # Admin authorization: only the Authority admin may report upstream purchases
+    s = _get_settings()
+    if not s.dpyc_authority_npub:
+        return {
+            "success": False,
+            "error": "Admin authorization not configured. Set DPYC_AUTHORITY_NPUB.",
+        }
+    try:
+        caller_npub = _get_effective_user_id()
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+    if caller_npub != s.dpyc_authority_npub:
+        return {
+            "success": False,
+            "error": "Unauthorized. Only the Authority admin may report upstream purchases.",
+        }
+
     cache = _get_ledger_cache()
     supply = await cache.get(SUPPLY_USER_ID)
     supply.credit_deposit(

@@ -506,13 +506,20 @@ async def test_report_upstream_purchase_credits_supply():
     import tollbooth_authority.server as srv
 
     supply_ledger = _ledger_with_balance(500)
+    settings = _make_settings(dpyc_authority_npub=SAMPLE_NPUB)
 
     cache = MagicMock(spec=LedgerCache)
     cache.get = AsyncMock(return_value=supply_ledger)
     cache.mark_dirty = MagicMock()
     cache.flush_user = AsyncMock(return_value=True)
 
-    with patch.object(srv, "_get_ledger_cache", return_value=cache):
+    srv._dpyc_sessions["admin-1"] = SAMPLE_NPUB
+
+    with (
+        patch.object(srv, "_require_user_id", return_value="admin-1"),
+        patch.object(srv, "_get_settings", return_value=settings),
+        patch.object(srv, "_get_ledger_cache", return_value=cache),
+    ):
         result = await srv.report_upstream_purchase(1000)
 
     assert result["success"] is True
@@ -1034,3 +1041,59 @@ async def test_deprecated_certify_purchase_delegates():
     assert result["fee_sats"] == 20
     assert result["tax_paid_sats"] == 20
     assert result["net_sats"] == 980
+
+
+# ---------------------------------------------------------------------------
+# report_upstream_purchase — admin auth (H-2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_report_upstream_purchase_non_admin_rejected():
+    """report_upstream_purchase rejects non-admin callers."""
+    import tollbooth_authority.server as srv
+
+    settings = _make_settings(dpyc_authority_npub=SAMPLE_NPUB)
+    non_admin_npub = "npub1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqs3mlyh"
+
+    srv._dpyc_sessions["caller-1"] = non_admin_npub
+
+    with (
+        patch.object(srv, "_require_user_id", return_value="caller-1"),
+        patch.object(srv, "_get_settings", return_value=settings),
+    ):
+        result = await srv.report_upstream_purchase(1000)
+
+    assert result["success"] is False
+    assert "Unauthorized" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_report_upstream_purchase_no_admin_configured():
+    """report_upstream_purchase fails when DPYC_AUTHORITY_NPUB is not set."""
+    import tollbooth_authority.server as srv
+
+    settings = _make_settings(dpyc_authority_npub="")
+
+    with patch.object(srv, "_get_settings", return_value=settings):
+        result = await srv.report_upstream_purchase(1000)
+
+    assert result["success"] is False
+    assert "not configured" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_report_upstream_purchase_no_dpyc_session():
+    """report_upstream_purchase fails when no DPYC session is active."""
+    import tollbooth_authority.server as srv
+
+    settings = _make_settings(dpyc_authority_npub=SAMPLE_NPUB)
+
+    with (
+        patch.object(srv, "_require_user_id", return_value="caller-no-session"),
+        patch.object(srv, "_get_settings", return_value=settings),
+    ):
+        result = await srv.report_upstream_purchase(1000)
+
+    assert result["success"] is False
+    assert "No DPYC identity active" in result["error"]
