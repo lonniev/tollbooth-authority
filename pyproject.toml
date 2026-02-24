@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tollbooth-authority"
-version = "0.1.1"
+version = "0.2.0"
 description = "Tollbooth Authority — Certified Purchase Order Service"
 readme = "README.md"
 license = "Apache-2.0"
@@ -19,7 +19,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "PyJWT>=2.8.0",
     "cryptography>=42.0.0",
-    "tollbooth-dpyc[nostr]>=0.1.23",
+    "tollbooth-dpyc[nostr]>=0.1.24",
 ]
 
 [project.optional-dependencies]

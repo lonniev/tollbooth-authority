@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import importlib.metadata
 import logging
-import math
 import platform
 import signal
 import sys
@@ -19,11 +18,12 @@ logger = logging.getLogger(__name__)
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_headers
 
-from tollbooth import BTCPayClient, BTCPayError, LedgerCache
+from tollbooth import BTCPayClient, BTCPayError, LedgerCache, ToolPricing
 from tollbooth.tools.credits import (
     check_balance_tool,
     check_payment_tool,
     purchase_tax_credits_tool,
+    reconcile_pending_invoices,
 )
 
 from tollbooth_authority import __version__
@@ -43,34 +43,34 @@ mcp = FastMCP(
     instructions=(
         "Tollbooth Authority — Certified Purchase Order Service.\n\n"
         "The Authority is the institutional backbone of the Tollbooth ecosystem. "
-        "It registers MCP operators, collects a small tax on every purchase order "
-        "via Bitcoin Lightning, and issues EdDSA-signed JWT certificates that prove "
-        "an operator has paid before collecting a fare from a user.\n\n"
+        "It registers MCP operators, collects a small certification fee on every "
+        "purchase order via Bitcoin Lightning, and issues EdDSA-signed JWT certificates "
+        "that prove an operator has paid before collecting a fare from a user.\n\n"
         "## First-Time Bootstrap (follow these steps in order)\n\n"
         "1. Call `register_operator(npub=...)` with your Nostr npub — creates your "
         "ledger entry. Get your npub from the dpyc-oracle's how_to_join() tool. "
         "Returns your operator_id (npub) and a zero balance.\n"
-        "2. Call `purchase_tax_credits` with the number of sats to pre-fund "
+        "2. Call `purchase_credits` with the number of sats to pre-fund "
         "(e.g., 1000). Returns a Lightning invoice with a checkoutLink.\n"
         "3. Pay the invoice using any Lightning wallet.\n"
-        "4. Call `check_tax_payment` with the invoice_id from step 2. "
-        "On settlement, your tax balance is credited.\n"
-        "5. Call `tax_balance` or `operator_status` to confirm your funded balance "
+        "4. Call `check_payment` with the invoice_id from step 2. "
+        "On settlement, your credit balance is funded.\n"
+        "5. Call `check_balance` or `operator_status` to confirm your funded balance "
         "and retrieve the Authority's Ed25519 public key.\n\n"
-        "## Tax Computation\n\n"
-        "Tax per certification = max(TAX_MIN_SATS, ceil(amount_sats * TAX_RATE_PERCENT / 100)). "
-        "Defaults: 2% rate, 10 sat minimum. The tax is deducted from the operator's "
-        "pre-funded balance when `certify_purchase` is called.\n\n"
+        "## Fee Computation\n\n"
+        "Fee per certification = max(TAX_MIN_SATS, ceil(amount_sats * TAX_RATE_PERCENT / 100)). "
+        "Defaults: 2% rate, 10 sat minimum. The fee is deducted from the operator's "
+        "pre-funded balance when `certify_credits` is called.\n\n"
         "## Tool Overview\n\n"
         "- `register_operator` — First step. Idempotent; safe to call again.\n"
-        "- `purchase_tax_credits` — Creates a Lightning invoice. Call whenever balance is low.\n"
-        "- `check_tax_payment` — Polls an invoice. Call after payment; safe to call multiple times.\n"
-        "- `tax_balance` — Read-only balance check. No side effects.\n"
+        "- `purchase_credits` — Creates a Lightning invoice. Call whenever balance is low.\n"
+        "- `check_payment` — Polls an invoice. Call after payment; safe to call multiple times.\n"
+        "- `check_balance` — Read-only balance check. No side effects.\n"
         "- `operator_status` — Registration info + Authority public key for JWT verification.\n"
-        "- `certify_purchase` — Core machine-to-machine tool. Deducts tax, returns signed JWT.\n"
+        "- `certify_credits` — Core machine-to-machine tool. Deducts fee, returns signed JWT.\n"
         "## Low-Balance Recovery\n\n"
-        "If `certify_purchase` returns 'Insufficient tax balance', the operator must "
-        "fund more credits: call `purchase_tax_credits`, pay, then `check_tax_payment`. "
+        "If `certify_credits` returns 'Insufficient credit balance', the operator must "
+        "fund more credits: call `purchase_credits`, pay, then `check_payment`. "
         "The operator's MCP server should surface this to the admin, not the end user.\n\n"
         "## Key Generation\n\n"
         "The Authority signs certificates with an Ed25519 key. Generate one with "
@@ -78,7 +78,7 @@ mcp = FastMCP(
         "AUTHORITY_SIGNING_KEY; the public key is hardcoded in tollbooth-dpyc "
         "for verification.\n\n"
         "## Deployment Configuration — Persistence & Tiers\n\n"
-        "The Authority's operator tax balances are stored in a persistent vault so "
+        "The Authority's operator credit balances are stored in a persistent vault so "
         "they survive process restarts and redeployments. **The vault is pluggable** — "
         "this reference deployment uses TheBrain as its vault store, but other "
         "implementations could use Redis, SQLite, S3, or any key-value store.\n\n"
@@ -98,7 +98,7 @@ mcp = FastMCP(
         'e.g., `{"vip": {"multiplier": 100000}}`\n'
         "- `BTCPAY_USER_TIERS` — JSON mapping operator npubs to tier names, "
         'e.g., `{"npub1abc...": "vip"}`\n\n'
-        "These grant trusted operators a credit multiplier on tax purchases. "
+        "These grant trusted operators a credit multiplier on purchases. "
         "If unset, all operators receive the default 1x multiplier.\n"
     ),
 )
@@ -385,7 +385,7 @@ async def register_operator(
     """Register as an operator on the Tollbooth turnpike via Horizon OAuth identity.
 
     Call this first. Creates a ledger entry for the authenticated operator so
-    they can purchase tax credits and certify purchase orders. Idempotent — safe
+    they can purchase credits and certify purchase orders. Idempotent — safe
     to call again if already registered (returns current balance).
 
     Your DPYC npub (Nostr public key) is required — it serves as your
@@ -394,11 +394,11 @@ async def register_operator(
 
     Returns:
         success: Always True on completion.
-        operator_id: Your npub (use this for certify_purchase calls).
-        balance_sats: Current tax balance (0 for new registrations).
+        operator_id: Your npub (use this for certify_credits calls).
+        balance_sats: Current credit balance (0 for new registrations).
         message: Human-readable confirmation.
 
-    Next step: Call purchase_tax_credits to fund your tax balance.
+    Next step: Call purchase_credits to fund your credit balance.
 
     Errors: Fails if not authenticated via Horizon (FastMCP Cloud required)
     or if npub is invalid.
@@ -432,24 +432,24 @@ async def register_operator(
 
 
 @mcp.tool()
-async def purchase_tax_credits(
+async def purchase_credits(
     amount_sats: Annotated[
         int,
         Field(
             description=(
-                "Number of satoshis to pre-fund into your tax balance. "
-                "This is the tax reserve, not the user-facing price. "
-                "At 2% tax rate, 1000 sats funds ~50,000 sats of certified purchases. "
+                "Number of satoshis to pre-fund into your credit balance. "
+                "This is the certification fee reserve, not the user-facing price. "
+                "At 2% fee rate, 1000 sats funds ~50,000 sats of certified purchases. "
                 "Minimum 1."
             ),
         ),
     ],
 ) -> dict[str, Any]:
-    """Create a Lightning invoice to pre-fund your operator tax balance.
+    """Create a Lightning invoice to pre-fund your operator credit balance.
 
-    Call this whenever your tax balance is low or zero. Returns a Lightning
+    Call this whenever your credit balance is low or zero. Returns a Lightning
     invoice with a checkoutLink — pay it with any Lightning wallet. After
-    payment, call check_tax_payment with the returned invoice_id to credit
+    payment, call check_payment with the returned invoice_id to credit
     your balance.
 
     Do NOT call this if you already have a pending unpaid invoice — pay the
@@ -457,11 +457,11 @@ async def purchase_tax_credits(
 
     Returns:
         success: True if invoice was created.
-        invoice_id: The BTCPay invoice ID (pass to check_tax_payment).
+        invoice_id: The BTCPay invoice ID (pass to check_payment).
         checkout_link: URL to pay the Lightning invoice.
         amount_sats: The amount requested.
 
-    Next step: Pay the invoice, then call check_tax_payment(invoice_id).
+    Next step: Pay the invoice, then call check_payment(invoice_id).
 
     Errors: Fails if not registered (call register_operator first) or if
     BTCPay is unreachable.
@@ -484,31 +484,31 @@ async def purchase_tax_credits(
 
 
 @mcp.tool()
-async def check_tax_payment(
+async def check_payment(
     invoice_id: Annotated[
         str,
         Field(
             description=(
-                "The BTCPay invoice ID returned by purchase_tax_credits. "
+                "The BTCPay invoice ID returned by purchase_credits. "
                 "Example: 'AbCdEfGh1234'. Pass exactly the value from the "
-                "invoice_id field of the purchase_tax_credits response."
+                "invoice_id field of the purchase_credits response."
             ),
         ),
     ],
 ) -> dict[str, Any]:
-    """Verify that a Lightning invoice has settled and credit the payment to your tax balance.
+    """Verify that a Lightning invoice has settled and credit the payment to your balance.
 
-    Call this after paying the invoice from purchase_tax_credits. Safe to call
+    Call this after paying the invoice from purchase_credits. Safe to call
     multiple times — credits are only granted once per invoice. If the invoice
     hasn't settled yet, returns the current status without crediting.
 
     Returns:
         success: True if balance was credited (or already was).
         status: BTCPay invoice status (e.g., 'Settled', 'New', 'Processing').
-        balance_sats: Updated tax balance after crediting.
+        balance_sats: Updated credit balance after crediting.
 
-    Next step: Call tax_balance or operator_status to confirm, then
-    certify_purchase when ready to stamp purchase orders.
+    Next step: Call check_balance or operator_status to confirm, then
+    certify_credits when ready to stamp purchase orders.
 
     Errors: Returns success=False if the invoice_id is invalid or expired.
     """
@@ -533,19 +533,19 @@ async def check_tax_payment(
 
 
 @mcp.tool()
-async def tax_balance() -> dict[str, Any]:
-    """Check your current operator tax balance, total deposited, total consumed, and pending invoices.
+async def check_balance() -> dict[str, Any]:
+    """Check your current operator credit balance, total deposited, total consumed, and pending invoices.
 
     Read-only — no side effects. Call anytime to check your funding level
     before certifying, or to monitor usage.
 
     Returns:
-        balance_sats: Current available tax balance.
+        balance_sats: Current available credit balance.
         total_deposited_sats: Lifetime credits purchased.
-        total_consumed_sats: Lifetime tax deducted via certify_purchase.
+        total_consumed_sats: Lifetime fees deducted via certify_credits.
         pending_invoices: Number of unpaid invoices.
 
-    Next step: If balance is low, call purchase_tax_credits to top up.
+    Next step: If balance is low, call purchase_credits to top up.
     """
     try:
         user_id = _get_effective_user_id()
@@ -560,7 +560,6 @@ async def tax_balance() -> dict[str, Any]:
         _reconciled_users.add(user_id)
         try:
             btcpay = _get_btcpay()
-            from tollbooth.tools.credits import reconcile_pending_invoices
             recon = await reconcile_pending_invoices(
                 btcpay, cache, user_id,
                 tier_config_json=s.btcpay_tier_config,
@@ -628,6 +627,13 @@ async def operator_status() -> dict[str, Any]:
         "authority_public_key": public_key_pem,
     }
 
+    # Surface certification fee info
+    pricing = s.certify_pricing
+    result["certification_fee"] = {
+        "rate_percent": pricing.rate_percent,
+        "min_sats": pricing.min_cost,
+    }
+
     # Surface upstream chain config so operators can see the authority hierarchy
     if s.upstream_authority_address:
         result["upstream_authority_address"] = s.upstream_authority_address
@@ -677,7 +683,7 @@ async def service_status() -> dict[str, Any]:
 
 
 @mcp.tool()
-async def certify_purchase(
+async def certify_credits(
     operator_id: Annotated[
         str,
         Field(
@@ -693,15 +699,16 @@ async def certify_purchase(
         Field(
             description=(
                 "The total purchase amount in satoshis that the user wants to buy. "
-                "The Authority computes tax as max(10, ceil(amount_sats * 2 / 100)) "
-                "and deducts it from the operator's pre-funded tax balance. "
-                "The certificate's net_sats = amount_sats - tax_sats. "
+                "The Authority computes a certification fee as "
+                "max(10, ceil(amount_sats * 2 / 100)) and deducts it from the "
+                "operator's pre-funded credit balance. "
+                "The certificate's net_sats = amount_sats - fee_sats. "
                 "Must be positive."
             ),
         ),
     ],
 ) -> dict[str, Any]:
-    """Certify a purchase order: deduct tax from the operator's balance and return an EdDSA-signed JWT.
+    """Certify a purchase order: deduct fee from the operator's balance and return an EdDSA-signed JWT.
 
     This is the core machine-to-machine tool. Called by the operator's MCP server
     (not by end users) when a user requests to purchase credits. The returned JWT
@@ -709,20 +716,21 @@ async def certify_purchase(
     before the operator creates a Lightning invoice for the user.
 
     Do NOT call this as an end user — it requires operator-level context.
-    Do NOT call this if the operator's tax balance is insufficient — check
-    tax_balance first, or handle the 'Insufficient tax balance' error.
+    Do NOT call this if the operator's credit balance is insufficient — check
+    check_balance first, or handle the 'Insufficient credit balance' error.
 
     Returns:
         success: True if the certificate was issued.
         certificate: The EdDSA-signed JWT string (pass to tollbooth-dpyc for verification).
         jti: Unique certificate ID (for audit/anti-replay).
         amount_sats: The original purchase amount.
-        tax_paid_sats: Tax deducted from operator balance.
-        net_sats: amount_sats minus tax (what the user effectively receives).
+        fee_sats: Certification fee deducted from operator balance.
+        tax_paid_sats: Same as fee_sats (backward compatibility).
+        net_sats: amount_sats minus fee (what the user effectively receives).
         expires_at: Unix timestamp when the certificate expires.
 
-    On 'Insufficient tax balance' error: call purchase_tax_credits to top up,
-    pay the invoice, call check_tax_payment, then retry certify_purchase.
+    On 'Insufficient credit balance' error: call purchase_credits to top up,
+    pay the invoice, call check_payment, then retry certify_credits.
     """
     if amount_sats <= 0:
         return {"success": False, "error": "amount_sats must be positive."}
@@ -732,18 +740,15 @@ async def certify_purchase(
     cache = _get_ledger_cache()
     replay = _get_replay_tracker()
 
-    # Compute tax
-    tax_sats = max(
-        s.tax_min_sats,
-        math.ceil(amount_sats * s.tax_rate_percent / 100),
-    )
+    # Compute certification fee via ToolPricing
+    fee_sats = s.certify_pricing.compute(amount_sats=amount_sats)
 
     # Debit operator balance
     ledger = await cache.get(operator_id)
-    if not ledger.debit("certify_purchase", tax_sats):
+    if not ledger.debit("certify_credits", fee_sats):
         return {
             "success": False,
-            "error": f"Insufficient tax balance. Need {tax_sats} sats, have {ledger.balance_api_sats}.",
+            "error": f"Insufficient credit balance. Need {fee_sats} sats, have {ledger.balance_api_sats}.",
         }
 
     cache.mark_dirty(operator_id)
@@ -753,8 +758,8 @@ async def certify_purchase(
     if s.upstream_authority_address:
         supply = await cache.get(SUPPLY_USER_ID)
         if not supply.debit("certify_supply", amount_sats):
-            # Rollback the tax debit
-            ledger.rollback_debit("certify_purchase", tax_sats)
+            # Rollback the fee debit
+            ledger.rollback_debit("certify_credits", fee_sats)
             return {
                 "success": False,
                 "error": (
@@ -770,7 +775,7 @@ async def certify_purchase(
         try:
             await registry.check_membership(operator_id)
         except RegistryError as e:
-            ledger.rollback_debit("certify_purchase", tax_sats)
+            ledger.rollback_debit("certify_credits", fee_sats)
             if supply is not None:
                 supply.rollback_debit("certify_supply", amount_sats)
             return {"success": False, "error": f"DPYC membership check failed: {e}"}
@@ -779,7 +784,7 @@ async def certify_purchase(
     claims = create_certificate_claims(
         operator_id=operator_id,
         amount_sats=amount_sats,
-        tax_sats=tax_sats,
+        tax_sats=fee_sats,
         ttl_seconds=s.certificate_ttl_seconds,
         authority_npub=s.dpyc_authority_npub,
     )
@@ -791,14 +796,15 @@ async def certify_purchase(
 
     # Flush immediately (credit-critical)
     if not await cache.flush_user(operator_id):
-        logger.error("Failed to persist tax debit for %s", operator_id)
+        logger.error("Failed to persist fee debit for %s", operator_id)
 
     return {
         "success": True,
         "certificate": token,
         "jti": claims["jti"],
         "amount_sats": amount_sats,
-        "tax_paid_sats": tax_sats,
+        "fee_sats": fee_sats,
+        "tax_paid_sats": fee_sats,  # backward compatibility
         "net_sats": claims["net_sats"],
         "expires_at": claims["exp"],
     }
@@ -899,3 +905,85 @@ async def check_dpyc_membership(npub: str) -> dict[str, Any]:
         return {"success": False, "error": str(e)}
     finally:
         await registry.close()
+
+
+# ---------------------------------------------------------------------------
+# Deprecated tool shims (v0.1.x names — remove after one release cycle)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def purchase_tax_credits(
+    amount_sats: Annotated[
+        int,
+        Field(description="Deprecated — use purchase_credits instead."),
+    ],
+) -> dict[str, Any]:
+    """Deprecated — use purchase_credits instead.
+
+    This tool name was renamed in v0.2.0. Call purchase_credits with the
+    same parameters for identical behavior.
+    """
+    return {
+        "success": False,
+        "error": (
+            "purchase_tax_credits has been renamed to purchase_credits in v0.2.0. "
+            "Please call purchase_credits(amount_sats=...) instead."
+        ),
+    }
+
+
+@mcp.tool()
+async def check_tax_payment(
+    invoice_id: Annotated[
+        str,
+        Field(description="Deprecated — use check_payment instead."),
+    ],
+) -> dict[str, Any]:
+    """Deprecated — use check_payment instead.
+
+    This tool name was renamed in v0.2.0. Call check_payment with the
+    same parameters for identical behavior.
+    """
+    return {
+        "success": False,
+        "error": (
+            "check_tax_payment has been renamed to check_payment in v0.2.0. "
+            "Please call check_payment(invoice_id=...) instead."
+        ),
+    }
+
+
+@mcp.tool()
+async def tax_balance() -> dict[str, Any]:
+    """Deprecated — use check_balance instead.
+
+    This tool name was renamed in v0.2.0. Call check_balance for identical behavior.
+    """
+    return {
+        "success": False,
+        "error": (
+            "tax_balance has been renamed to check_balance in v0.2.0. "
+            "Please call check_balance() instead."
+        ),
+    }
+
+
+@mcp.tool()
+async def certify_purchase(
+    operator_id: Annotated[
+        str,
+        Field(description="The operator's DPYC npub."),
+    ],
+    amount_sats: Annotated[
+        int,
+        Field(description="The total purchase amount in satoshis."),
+    ],
+) -> dict[str, Any]:
+    """Deprecated — use certify_credits instead.
+
+    This shim delegates to certify_credits for backward compatibility.
+    Downstream MCP servers that call certify_purchase will continue to work
+    during the migration period.
+    """
+    return await certify_credits(operator_id=operator_id, amount_sats=amount_sats)
