@@ -10,9 +10,6 @@ from tollbooth import ToolPricing
 class AuthoritySettings(BaseSettings):
     """All env vars for the Tollbooth Authority service."""
 
-    # Ed25519 signing key — base64-encoded PEM private key
-    authority_signing_key: str = ""
-
     # Authority's own BTCPay (for collecting operator tax)
     btcpay_host: str = ""
     btcpay_store_id: str = ""
