@@ -8,6 +8,8 @@ import logging
 import platform
 import signal
 import sys
+import time
+import uuid
 from datetime import datetime, timezone
 from typing import Annotated, Any
 
@@ -27,11 +29,9 @@ from tollbooth.tools.credits import (
 )
 
 from tollbooth_authority import __version__
-from tollbooth_authority.certificate import create_certificate_claims
 from tollbooth_authority.config import AuthoritySettings
 from tollbooth_authority.registry import DPYCRegistry, RegistryError
 from tollbooth_authority.replay import ReplayTracker
-from tollbooth_authority.signing import AuthoritySigner
 from tollbooth_authority.nostr_signing import AuthorityNostrSigner
 from tollbooth.vaults import TheBrainVault
 
@@ -45,8 +45,9 @@ mcp = FastMCP(
         "Tollbooth Authority — Certified Purchase Order Service.\n\n"
         "The Authority is the institutional backbone of the Tollbooth ecosystem. "
         "It registers MCP operators, collects a small certification fee on every "
-        "purchase order via Bitcoin Lightning, and issues EdDSA-signed JWT certificates "
-        "that prove an operator has paid before collecting a fare from a user.\n\n"
+        "purchase order via Bitcoin Lightning, and issues Schnorr-signed Nostr event "
+        "certificates that prove an operator has paid before collecting a fare from "
+        "a user.\n\n"
         "## First-Time Bootstrap (follow these steps in order)\n\n"
         "1. Call `register_operator(npub=...)` with your Nostr npub — creates your "
         "ledger entry. Get your npub from the dpyc-oracle's how_to_join() tool. "
@@ -57,7 +58,7 @@ mcp = FastMCP(
         "4. Call `check_payment` with the invoice_id from step 2. "
         "On settlement, your credit balance is funded.\n"
         "5. Call `check_balance` or `operator_status` to confirm your funded balance "
-        "and retrieve the Authority's Ed25519 public key.\n\n"
+        "and retrieve the Authority's Nostr npub for certificate verification.\n\n"
         "## Fee Computation\n\n"
         "Fee per certification = max(TAX_MIN_SATS, ceil(amount_sats * TAX_RATE_PERCENT / 100)). "
         "Defaults: 2% rate, 10 sat minimum. The fee is deducted from the operator's "
@@ -67,17 +68,18 @@ mcp = FastMCP(
         "- `purchase_credits` — Creates a Lightning invoice. Call whenever balance is low.\n"
         "- `check_payment` — Polls an invoice. Call after payment; safe to call multiple times.\n"
         "- `check_balance` — Read-only balance check. No side effects.\n"
-        "- `operator_status` — Registration info + Authority public key for JWT verification.\n"
-        "- `certify_credits` — Core machine-to-machine tool. Deducts fee, returns signed JWT.\n"
+        "- `operator_status` — Registration info + Authority npub for certificate verification.\n"
+        "- `certify_credits` — Core machine-to-machine tool. Deducts fee, returns Schnorr-signed "
+        "Nostr event certificate.\n"
         "## Low-Balance Recovery\n\n"
         "If `certify_credits` returns 'Insufficient credit balance', the operator must "
         "fund more credits: call `purchase_credits`, pay, then `check_payment`. "
         "The operator's MCP server should surface this to the admin, not the end user.\n\n"
         "## Key Generation\n\n"
-        "The Authority signs certificates with an Ed25519 key. Generate one with "
-        "`python scripts/generate_keypair.py`. The private key goes in "
-        "AUTHORITY_SIGNING_KEY; the public key is hardcoded in tollbooth-dpyc "
-        "for verification.\n\n"
+        "The Authority signs certificates with a Nostr nsec/npub keypair. Generate one "
+        "using any Nostr key generator (e.g., `nak key generate`). The nsec goes in "
+        "`TOLLBOOTH_NOSTR_OPERATOR_NSEC`; the npub is surfaced via `operator_status` "
+        "for tollbooth-dpyc verification.\n\n"
         "## Deployment Configuration — Persistence & Tiers\n\n"
         "The Authority's operator credit balances are stored in a persistent vault so "
         "they survive process restarts and redeployments. **The vault is pluggable** — "
@@ -133,42 +135,28 @@ def _get_settings() -> AuthoritySettings:
 # Singletons (lazy)
 # ---------------------------------------------------------------------------
 
-_signer: AuthoritySigner | None = None
 _btcpay_client: BTCPayClient | None = None
 _vault: Any = None
 _ledger_cache: LedgerCache | None = None
 _replay_tracker: ReplayTracker | None = None
 
 
-def _get_signer() -> AuthoritySigner:
-    global _signer
-    if _signer is not None:
-        return _signer
-    s = _get_settings()
-    if not s.authority_signing_key:
-        raise ValueError("AUTHORITY_SIGNING_KEY is required.")
-    _signer = AuthoritySigner(s.authority_signing_key)
-    logger.info("Authority signer initialized.")
-    return _signer
-
-
 _nostr_signer: AuthorityNostrSigner | None = None
 
 
-def _get_nostr_signer() -> AuthorityNostrSigner | None:
-    """Return the Nostr signer if nsec is configured, else None."""
+def _get_nostr_signer() -> AuthorityNostrSigner:
+    """Return the Nostr signer. Raises ValueError if nsec is not configured."""
     global _nostr_signer
     if _nostr_signer is not None:
         return _nostr_signer
     s = _get_settings()
     if not s.tollbooth_nostr_operator_nsec:
-        return None
-    try:
-        _nostr_signer = AuthorityNostrSigner(s.tollbooth_nostr_operator_nsec)
-        logger.info("Authority Nostr signer initialized (npub=%s).", _nostr_signer.npub)
-    except Exception as exc:
-        logger.warning("Failed to initialize Nostr signer: %s", exc)
-        return None
+        raise ValueError(
+            "TOLLBOOTH_NOSTR_OPERATOR_NSEC is required. "
+            "Generate a Nostr keypair (e.g., `nak key generate`) and set the nsec."
+        )
+    _nostr_signer = AuthorityNostrSigner(s.tollbooth_nostr_operator_nsec)
+    logger.info("Authority Nostr signer initialized (npub=%s).", _nostr_signer.npub)
     return _nostr_signer
 
 
@@ -605,25 +593,23 @@ async def check_balance() -> dict[str, Any]:
 
 @mcp.tool()
 async def operator_status() -> dict[str, Any]:
-    """View your registration status, balance summary, and the Authority's verification keys.
+    """View your registration status, balance summary, and the Authority's Nostr npub.
 
-    Call this to retrieve the Authority's public key(s) for configuring your
+    Call this to retrieve the Authority's npub for configuring your
     tollbooth-dpyc integration. Also useful as a health check to confirm
     registration and current balance.
 
     Returns:
-        operator_id: Your Horizon user ID.
+        operator_id: Your DPYC npub.
         registered: Always True if the call succeeds.
         balance_sats: Current tax balance.
         total_deposited_sats: Lifetime credits purchased.
         total_consumed_sats: Lifetime tax deducted.
-        authority_public_key: PEM-encoded Ed25519 public key for JWT verification.
-        authority_npub: Authority's Nostr npub for Schnorr certificate verification
-            (present when Nostr signing is configured).
-        nostr_certificate_enabled: True when certify_credits returns dual-mode output.
+        authority_npub: Authority's Nostr npub for Schnorr certificate verification.
+        nostr_certificate_enabled: Always True (Nostr is the only signing path).
 
-    Use authority_public_key (JWT) or authority_npub (Nostr) in your
-    TollboothConfig so the library can verify certificates locally.
+    Use authority_npub in your TollboothConfig so the library can verify
+    Schnorr-signed Nostr event certificates locally.
     """
     try:
         user_id = _get_effective_user_id()
@@ -631,12 +617,7 @@ async def operator_status() -> dict[str, Any]:
         return {"success": False, "error": str(e)}
 
     s = _get_settings()
-
-    try:
-        signer = _get_signer()
-        public_key_pem = signer.public_key_pem
-    except ValueError:
-        public_key_pem = "<signing key not configured>"
+    nostr_signer = _get_nostr_signer()
 
     cache = _get_ledger_cache()
     ledger = await cache.get(user_id)
@@ -648,7 +629,8 @@ async def operator_status() -> dict[str, Any]:
         "balance_sats": ledger.balance_api_sats,
         "total_deposited_sats": ledger.total_deposited_api_sats,
         "total_consumed_sats": ledger.total_consumed_api_sats,
-        "authority_public_key": public_key_pem,
+        "authority_npub": nostr_signer.npub,
+        "nostr_certificate_enabled": True,
     }
 
     # Surface certification fee info
@@ -667,13 +649,6 @@ async def operator_status() -> dict[str, Any]:
         result["upstream_supply_sats"] = supply.balance_api_sats
         result["upstream_supply_consumed_sats"] = supply.total_consumed_api_sats
 
-    # Surface DPYC identity info and Nostr certificate capability
-    nostr_signer = _get_nostr_signer()
-    if nostr_signer:
-        result["authority_npub"] = nostr_signer.npub
-        result["nostr_certificate_enabled"] = True
-    elif s.dpyc_authority_npub:
-        result["authority_npub"] = s.dpyc_authority_npub
     if s.dpyc_enforce_membership:
         result["dpyc_registry_enforcement"] = True
 
@@ -736,17 +711,13 @@ async def certify_credits(
         ),
     ],
 ) -> dict[str, Any]:
-    """Certify a purchase order: deduct fee from the operator's balance and return a signed certificate.
+    """Certify a purchase order: deduct fee and return a Schnorr-signed Nostr event certificate.
 
     This is the core machine-to-machine tool. Called by the operator's MCP server
     (not by end users) when a user requests to purchase credits. The returned
-    certificate must be verified by tollbooth-dpyc using the Authority's key
-    before the operator creates a Lightning invoice for the user.
-
-    Phase 1 dual-mode: when the Authority's Nostr nsec is configured, the
-    response includes both a JWT (``certificate``) and a Nostr event
-    (``nostr_event``). Operators using tollbooth-dpyc >=0.1.26 can verify
-    either format. Legacy operators ignore the ``nostr_event`` field.
+    certificate is a Schnorr-signed Nostr event (kind 30079) that must be verified
+    by tollbooth-dpyc using the Authority's npub before the operator creates a
+    Lightning invoice for the user.
 
     Do NOT call this as an end user — it requires operator-level context.
     Do NOT call this if the operator's credit balance is insufficient — check
@@ -754,8 +725,7 @@ async def certify_credits(
 
     Returns:
         success: True if the certificate was issued.
-        certificate: The EdDSA-signed JWT string (always present, backward compat).
-        nostr_event: Schnorr-signed Nostr event JSON (present when nsec configured).
+        certificate: Schnorr-signed Nostr event JSON (the certificate).
         jti: Unique certificate ID (for audit/anti-replay).
         amount_sats: The original purchase amount.
         fee_sats: Certification fee deducted from operator balance.
@@ -770,12 +740,13 @@ async def certify_credits(
         return {"success": False, "error": "amount_sats must be positive."}
 
     s = _get_settings()
-    signer = _get_signer()
+    nostr_signer = _get_nostr_signer()
     cache = _get_ledger_cache()
     replay = _get_replay_tracker()
 
     # Compute certification fee via ToolPricing
     fee_sats = s.certify_pricing.compute(amount_sats=amount_sats)
+    net_sats = amount_sats - fee_sats
 
     # Debit operator balance
     ledger = await cache.get(operator_id)
@@ -814,51 +785,42 @@ async def certify_credits(
                 supply.rollback_debit("certify_supply", amount_sats)
             return {"success": False, "error": f"DPYC membership check failed: {e}"}
 
-    # Build and sign certificate
-    claims = create_certificate_claims(
-        operator_id=operator_id,
-        amount_sats=amount_sats,
-        tax_sats=fee_sats,
-        ttl_seconds=s.certificate_ttl_seconds,
-        authority_npub=s.dpyc_authority_npub,
-    )
+    # Build claims and sign Nostr event certificate
+    jti = uuid.uuid4().hex
+    expiration = int(time.time()) + s.certificate_ttl_seconds
+
+    claims = {
+        "sub": operator_id,
+        "amount_sats": amount_sats,
+        "tax_paid_sats": fee_sats,
+        "net_sats": net_sats,
+        "dpyc_protocol": "dpyp-01-base-certificate",
+    }
 
     # Record JTI for anti-replay
-    replay.check_and_record(claims["jti"])
+    replay.check_and_record(jti)
 
-    token = signer.sign_certificate(claims)
-
-    # Nostr event signing (dual-mode — if nsec is configured)
-    nostr_signer = _get_nostr_signer()
-    nostr_event_json: str | None = None
-    if nostr_signer:
-        try:
-            nostr_event_json = nostr_signer.sign_certificate_event(
-                claims=claims,
-                jti=claims["jti"],
-                operator_npub=operator_id,
-                expiration=claims["exp"],
-            )
-        except Exception as exc:
-            logger.warning("Nostr certificate signing failed (non-fatal): %s", exc)
+    nostr_event_json = nostr_signer.sign_certificate_event(
+        claims=claims,
+        jti=jti,
+        operator_npub=operator_id,
+        expiration=expiration,
+    )
 
     # Flush immediately (credit-critical)
     if not await cache.flush_user(operator_id):
         logger.error("Failed to persist fee debit for %s", operator_id)
 
-    result: dict[str, Any] = {
+    return {
         "success": True,
-        "certificate": token,
-        "jti": claims["jti"],
+        "certificate": nostr_event_json,
+        "jti": jti,
         "amount_sats": amount_sats,
         "fee_sats": fee_sats,
         "tax_paid_sats": fee_sats,  # backward compatibility
-        "net_sats": claims["net_sats"],
-        "expires_at": claims["exp"],
+        "net_sats": net_sats,
+        "expires_at": expiration,
     }
-    if nostr_event_json:
-        result["nostr_event"] = nostr_event_json
-    return result
 
 
 @mcp.tool()
