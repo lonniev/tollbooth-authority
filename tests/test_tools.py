@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import base64
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
+from pynostr.key import PrivateKey  # type: ignore[import-untyped]
 
 from tollbooth import UserLedger, LedgerCache
 
 from tollbooth_authority.config import AuthoritySettings
+from tollbooth_authority.nostr_signing import AuthorityNostrSigner, NOSTR_CERT_KIND
 from tollbooth_authority.registry import DPYCRegistry, RegistryError
 from tollbooth_authority.replay import ReplayTracker
 from tollbooth_authority.signing import AuthoritySigner
@@ -1097,3 +1100,177 @@ async def test_report_upstream_purchase_no_dpyc_session():
 
     assert result["success"] is False
     assert "No DPYC identity active" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# Nostr dual-mode certify_credits
+# ---------------------------------------------------------------------------
+
+
+def _make_nostr_signer() -> AuthorityNostrSigner:
+    """Create an AuthorityNostrSigner from a fresh nsec."""
+    return AuthorityNostrSigner(PrivateKey().bech32())
+
+
+@pytest.mark.asyncio
+async def test_certify_credits_dual_mode_with_nsec():
+    """When nsec is configured, certify_credits returns both certificate and nostr_event."""
+    import tollbooth_authority.server as srv
+
+    signer = _make_signer()
+    nostr_signer = _make_nostr_signer()
+    settings = _make_settings(tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600)
+
+    ledger = _ledger_with_balance(1000)
+    cache = MagicMock(spec=LedgerCache)
+    cache.get = AsyncMock(return_value=ledger)
+    cache.mark_dirty = MagicMock()
+    cache.flush_user = AsyncMock(return_value=True)
+
+    replay = ReplayTracker(ttl_seconds=600)
+
+    with (
+        patch.object(srv, "_get_settings", return_value=settings),
+        patch.object(srv, "_get_signer", return_value=signer),
+        patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
+        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv, "_get_replay_tracker", return_value=replay),
+    ):
+        result = await srv.certify_credits("op-1", 1000)
+
+    assert result["success"] is True
+    assert "certificate" in result
+    assert "nostr_event" in result
+
+    # Verify the Nostr event is valid JSON with correct kind
+    event_dict = json.loads(result["nostr_event"])
+    assert event_dict["kind"] == NOSTR_CERT_KIND
+    assert "sig" in event_dict
+    assert event_dict["pubkey"] == nostr_signer.pubkey_hex
+
+
+@pytest.mark.asyncio
+async def test_certify_credits_no_nostr_event_without_nsec():
+    """When nsec is NOT configured, certify_credits returns only the JWT certificate."""
+    import tollbooth_authority.server as srv
+
+    signer = _make_signer()
+    settings = _make_settings(tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600)
+
+    ledger = _ledger_with_balance(1000)
+    cache = MagicMock(spec=LedgerCache)
+    cache.get = AsyncMock(return_value=ledger)
+    cache.mark_dirty = MagicMock()
+    cache.flush_user = AsyncMock(return_value=True)
+
+    replay = ReplayTracker(ttl_seconds=600)
+
+    with (
+        patch.object(srv, "_get_settings", return_value=settings),
+        patch.object(srv, "_get_signer", return_value=signer),
+        patch.object(srv, "_get_nostr_signer", return_value=None),
+        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv, "_get_replay_tracker", return_value=replay),
+    ):
+        result = await srv.certify_credits("op-1", 1000)
+
+    assert result["success"] is True
+    assert "certificate" in result
+    assert "nostr_event" not in result
+
+
+@pytest.mark.asyncio
+async def test_certify_credits_nostr_event_verifiable():
+    """The Nostr event returned by certify_credits passes Schnorr verification."""
+    from pynostr.event import Event  # type: ignore[import-untyped]
+
+    import tollbooth_authority.server as srv
+
+    signer = _make_signer()
+    nostr_signer = _make_nostr_signer()
+    settings = _make_settings(tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600)
+
+    ledger = _ledger_with_balance(1000)
+    cache = MagicMock(spec=LedgerCache)
+    cache.get = AsyncMock(return_value=ledger)
+    cache.mark_dirty = MagicMock()
+    cache.flush_user = AsyncMock(return_value=True)
+
+    replay = ReplayTracker(ttl_seconds=600)
+
+    with (
+        patch.object(srv, "_get_settings", return_value=settings),
+        patch.object(srv, "_get_signer", return_value=signer),
+        patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
+        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv, "_get_replay_tracker", return_value=replay),
+    ):
+        result = await srv.certify_credits("op-1", 1000)
+
+    event_dict = json.loads(result["nostr_event"])
+    event = Event.from_dict(event_dict)
+    assert event.verify() is True
+
+
+@pytest.mark.asyncio
+async def test_certify_credits_nostr_event_claims_match():
+    """The Nostr event content matches the JWT claims (amount, fee, net)."""
+    import tollbooth_authority.server as srv
+
+    signer = _make_signer()
+    nostr_signer = _make_nostr_signer()
+    settings = _make_settings(tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600)
+
+    ledger = _ledger_with_balance(1000)
+    cache = MagicMock(spec=LedgerCache)
+    cache.get = AsyncMock(return_value=ledger)
+    cache.mark_dirty = MagicMock()
+    cache.flush_user = AsyncMock(return_value=True)
+
+    replay = ReplayTracker(ttl_seconds=600)
+
+    with (
+        patch.object(srv, "_get_settings", return_value=settings),
+        patch.object(srv, "_get_signer", return_value=signer),
+        patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
+        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv, "_get_replay_tracker", return_value=replay),
+    ):
+        result = await srv.certify_credits("op-1", 1000)
+
+    event_dict = json.loads(result["nostr_event"])
+    content = json.loads(event_dict["content"])
+
+    assert content["amount_sats"] == 1000
+    assert content["tax_paid_sats"] == 20
+    assert content["net_sats"] == 980
+    assert content["dpyc_protocol"] == "dpyp-01-base-certificate"
+
+
+@pytest.mark.asyncio
+async def test_operator_status_nostr_fields_with_nsec():
+    """operator_status surfaces authority_npub and nostr_certificate_enabled when nsec is set."""
+    import tollbooth_authority.server as srv
+
+    signer = _make_signer()
+    nostr_signer = _make_nostr_signer()
+    settings = _make_settings()
+
+    ledger = UserLedger()
+    ledger.credit_deposit(1000, "test-seed")
+    cache = MagicMock(spec=LedgerCache)
+    cache.get = AsyncMock(return_value=ledger)
+
+    srv._dpyc_sessions["op-1"] = SAMPLE_NPUB
+
+    with (
+        patch.object(srv, "_require_user_id", return_value="op-1"),
+        patch.object(srv, "_get_settings", return_value=settings),
+        patch.object(srv, "_get_signer", return_value=signer),
+        patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
+        patch.object(srv, "_get_ledger_cache", return_value=cache),
+    ):
+        result = await srv.operator_status()
+
+    assert result["authority_npub"] == nostr_signer.npub
+    assert result["nostr_certificate_enabled"] is True

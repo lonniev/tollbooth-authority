@@ -32,6 +32,7 @@ from tollbooth_authority.config import AuthoritySettings
 from tollbooth_authority.registry import DPYCRegistry, RegistryError
 from tollbooth_authority.replay import ReplayTracker
 from tollbooth_authority.signing import AuthoritySigner
+from tollbooth_authority.nostr_signing import AuthorityNostrSigner
 from tollbooth.vaults import TheBrainVault
 
 # ---------------------------------------------------------------------------
@@ -149,6 +150,26 @@ def _get_signer() -> AuthoritySigner:
     _signer = AuthoritySigner(s.authority_signing_key)
     logger.info("Authority signer initialized.")
     return _signer
+
+
+_nostr_signer: AuthorityNostrSigner | None = None
+
+
+def _get_nostr_signer() -> AuthorityNostrSigner | None:
+    """Return the Nostr signer if nsec is configured, else None."""
+    global _nostr_signer
+    if _nostr_signer is not None:
+        return _nostr_signer
+    s = _get_settings()
+    if not s.tollbooth_nostr_operator_nsec:
+        return None
+    try:
+        _nostr_signer = AuthorityNostrSigner(s.tollbooth_nostr_operator_nsec)
+        logger.info("Authority Nostr signer initialized (npub=%s).", _nostr_signer.npub)
+    except Exception as exc:
+        logger.warning("Failed to initialize Nostr signer: %s", exc)
+        return None
+    return _nostr_signer
 
 
 def _get_btcpay() -> BTCPayClient:
@@ -584,9 +605,9 @@ async def check_balance() -> dict[str, Any]:
 
 @mcp.tool()
 async def operator_status() -> dict[str, Any]:
-    """View your registration status, balance summary, and the Authority's Ed25519 public key.
+    """View your registration status, balance summary, and the Authority's verification keys.
 
-    Call this to retrieve the Authority's public key for hardcoding into your
+    Call this to retrieve the Authority's public key(s) for configuring your
     tollbooth-dpyc integration. Also useful as a health check to confirm
     registration and current balance.
 
@@ -597,8 +618,11 @@ async def operator_status() -> dict[str, Any]:
         total_deposited_sats: Lifetime credits purchased.
         total_consumed_sats: Lifetime tax deducted.
         authority_public_key: PEM-encoded Ed25519 public key for JWT verification.
+        authority_npub: Authority's Nostr npub for Schnorr certificate verification
+            (present when Nostr signing is configured).
+        nostr_certificate_enabled: True when certify_credits returns dual-mode output.
 
-    The authority_public_key should be hardcoded in your tollbooth-dpyc
+    Use authority_public_key (JWT) or authority_npub (Nostr) in your
     TollboothConfig so the library can verify certificates locally.
     """
     try:
@@ -643,8 +667,12 @@ async def operator_status() -> dict[str, Any]:
         result["upstream_supply_sats"] = supply.balance_api_sats
         result["upstream_supply_consumed_sats"] = supply.total_consumed_api_sats
 
-    # Surface DPYC identity info when configured
-    if s.dpyc_authority_npub:
+    # Surface DPYC identity info and Nostr certificate capability
+    nostr_signer = _get_nostr_signer()
+    if nostr_signer:
+        result["authority_npub"] = nostr_signer.npub
+        result["nostr_certificate_enabled"] = True
+    elif s.dpyc_authority_npub:
         result["authority_npub"] = s.dpyc_authority_npub
     if s.dpyc_enforce_membership:
         result["dpyc_registry_enforcement"] = True
@@ -708,12 +736,17 @@ async def certify_credits(
         ),
     ],
 ) -> dict[str, Any]:
-    """Certify a purchase order: deduct fee from the operator's balance and return an EdDSA-signed JWT.
+    """Certify a purchase order: deduct fee from the operator's balance and return a signed certificate.
 
     This is the core machine-to-machine tool. Called by the operator's MCP server
-    (not by end users) when a user requests to purchase credits. The returned JWT
-    certificate must be verified by tollbooth-dpyc using the Authority's public key
+    (not by end users) when a user requests to purchase credits. The returned
+    certificate must be verified by tollbooth-dpyc using the Authority's key
     before the operator creates a Lightning invoice for the user.
+
+    Phase 1 dual-mode: when the Authority's Nostr nsec is configured, the
+    response includes both a JWT (``certificate``) and a Nostr event
+    (``nostr_event``). Operators using tollbooth-dpyc >=0.1.26 can verify
+    either format. Legacy operators ignore the ``nostr_event`` field.
 
     Do NOT call this as an end user — it requires operator-level context.
     Do NOT call this if the operator's credit balance is insufficient — check
@@ -721,7 +754,8 @@ async def certify_credits(
 
     Returns:
         success: True if the certificate was issued.
-        certificate: The EdDSA-signed JWT string (pass to tollbooth-dpyc for verification).
+        certificate: The EdDSA-signed JWT string (always present, backward compat).
+        nostr_event: Schnorr-signed Nostr event JSON (present when nsec configured).
         jti: Unique certificate ID (for audit/anti-replay).
         amount_sats: The original purchase amount.
         fee_sats: Certification fee deducted from operator balance.
@@ -794,11 +828,25 @@ async def certify_credits(
 
     token = signer.sign_certificate(claims)
 
+    # Nostr event signing (dual-mode — if nsec is configured)
+    nostr_signer = _get_nostr_signer()
+    nostr_event_json: str | None = None
+    if nostr_signer:
+        try:
+            nostr_event_json = nostr_signer.sign_certificate_event(
+                claims=claims,
+                jti=claims["jti"],
+                operator_npub=operator_id,
+                expiration=claims["exp"],
+            )
+        except Exception as exc:
+            logger.warning("Nostr certificate signing failed (non-fatal): %s", exc)
+
     # Flush immediately (credit-critical)
     if not await cache.flush_user(operator_id):
         logger.error("Failed to persist fee debit for %s", operator_id)
 
-    return {
+    result: dict[str, Any] = {
         "success": True,
         "certificate": token,
         "jti": claims["jti"],
@@ -808,6 +856,9 @@ async def certify_credits(
         "net_sats": claims["net_sats"],
         "expires_at": claims["exp"],
     }
+    if nostr_event_json:
+        result["nostr_event"] = nostr_event_json
+    return result
 
 
 @mcp.tool()
