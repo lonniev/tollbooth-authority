@@ -2,7 +2,7 @@
 
 Signs kind 30079 parameterized replaceable events that serve as
 Authority certificates. The Schnorr-native replacement for the
-Ed25519 JWT path in ``signing.py``.
+the previous Ed25519 JWT signing module (removed).
 """
 
 from __future__ import annotations
