@@ -9,9 +9,9 @@ from collections import OrderedDict
 class ReplayTracker:
     """Tracks seen JTI values to prevent certificate replay.
 
-    Defence-in-depth: JWT ``exp`` is the primary expiry mechanism.
-    This tracker provides an additional layer of protection against
-    replay within the TTL window.
+    Defence-in-depth: the certificate ``expiration`` tag is the primary
+    expiry mechanism.  This tracker provides an additional layer of
+    protection against replay within the TTL window.
     """
 
     def __init__(self, ttl_seconds: int = 600) -> None:
