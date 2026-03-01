@@ -38,10 +38,6 @@ class AuthoritySettings(BaseSettings):
     # Certificate TTL
     certificate_ttl_seconds: int = 600
 
-    # DPYC Nostr Identity
-    dpyc_authority_npub: str = ""
-    dpyc_upstream_authority_npub: str = ""
-
     # NeonVault (replaces TheBrainVault for ledger persistence)
     neon_database_url: str = ""
 

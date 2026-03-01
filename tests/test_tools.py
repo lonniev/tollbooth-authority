@@ -505,18 +505,18 @@ async def test_report_upstream_purchase_credits_supply():
     import tollbooth_authority.server as srv
 
     supply_ledger = _ledger_with_balance(500)
-    settings = _make_settings(dpyc_authority_npub=SAMPLE_NPUB)
+    nostr_signer = _make_nostr_signer()
 
     cache = MagicMock(spec=LedgerCache)
     cache.get = AsyncMock(return_value=supply_ledger)
     cache.mark_dirty = MagicMock()
     cache.flush_user = AsyncMock(return_value=True)
 
-    srv._dpyc_sessions["admin-1"] = SAMPLE_NPUB
+    srv._dpyc_sessions["admin-1"] = nostr_signer.npub
 
     with (
         patch.object(srv, "_require_user_id", return_value="admin-1"),
-        patch.object(srv, "_get_settings", return_value=settings),
+        patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
         patch.object(srv, "_get_ledger_cache", return_value=cache),
     ):
         result = await srv.report_upstream_purchase(1000)
@@ -1082,14 +1082,14 @@ async def test_report_upstream_purchase_non_admin_rejected():
     """report_upstream_purchase rejects non-admin callers."""
     import tollbooth_authority.server as srv
 
-    settings = _make_settings(dpyc_authority_npub=SAMPLE_NPUB)
+    nostr_signer = _make_nostr_signer()
     non_admin_npub = "npub1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqs3mlyh"
 
     srv._dpyc_sessions["caller-1"] = non_admin_npub
 
     with (
         patch.object(srv, "_require_user_id", return_value="caller-1"),
-        patch.object(srv, "_get_settings", return_value=settings),
+        patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
     ):
         result = await srv.report_upstream_purchase(1000)
 
@@ -1099,12 +1099,12 @@ async def test_report_upstream_purchase_non_admin_rejected():
 
 @pytest.mark.asyncio
 async def test_report_upstream_purchase_no_admin_configured():
-    """report_upstream_purchase fails when DPYC_AUTHORITY_NPUB is not set."""
+    """report_upstream_purchase fails when TOLLBOOTH_NOSTR_OPERATOR_NSEC is not set."""
     import tollbooth_authority.server as srv
 
-    settings = _make_settings(dpyc_authority_npub="")
-
-    with patch.object(srv, "_get_settings", return_value=settings):
+    with patch.object(
+        srv, "_get_nostr_signer", side_effect=ValueError("nsec not configured")
+    ):
         result = await srv.report_upstream_purchase(1000)
 
     assert result["success"] is False
@@ -1116,11 +1116,11 @@ async def test_report_upstream_purchase_no_dpyc_session():
     """report_upstream_purchase fails when no DPYC session is active."""
     import tollbooth_authority.server as srv
 
-    settings = _make_settings(dpyc_authority_npub=SAMPLE_NPUB)
+    nostr_signer = _make_nostr_signer()
 
     with (
         patch.object(srv, "_require_user_id", return_value="caller-no-session"),
-        patch.object(srv, "_get_settings", return_value=settings),
+        patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
     ):
         result = await srv.report_upstream_purchase(1000)
 
