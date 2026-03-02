@@ -90,7 +90,7 @@ async def test_certify_credits_success():
     assert "certificate" in result
     assert result["amount_sats"] == 1000
     # Fee: max(10, ceil(1000 * 2.0 / 100)) = max(10, 20) = 20
-    assert result["tax_paid_sats"] == 20
+    assert result["fee_sats"] == 20
     assert result["net_sats"] == 980
     cache.mark_dirty.assert_called_once_with("op-1")
     cache.flush_user.assert_called_once_with("op-1")
@@ -103,7 +103,7 @@ async def test_certify_credits_success():
 
 @pytest.mark.asyncio
 async def test_certify_credits_returns_fee_sats():
-    """certify_credits returns both fee_sats and tax_paid_sats (backward compat)."""
+    """certify_credits returns fee_sats."""
     import tollbooth_authority.server as srv
 
     nostr_signer = _make_nostr_signer()
@@ -127,8 +127,7 @@ async def test_certify_credits_returns_fee_sats():
 
     assert result["success"] is True
     assert result["fee_sats"] == 20
-    assert result["tax_paid_sats"] == 20  # backward compat
-    assert result["fee_sats"] == result["tax_paid_sats"]
+    assert "tax_paid_sats" not in result
 
 
 @pytest.mark.asyncio
@@ -203,8 +202,7 @@ async def test_certify_credits_applies_minimum_fee():
         result = await srv.certify_credits("op-1", 100)
 
     assert result["success"] is True
-    assert result["tax_paid_sats"] == 10  # min_sats, not 2%
-    assert result["fee_sats"] == 10
+    assert result["fee_sats"] == 10  # min_sats, not 2%
     assert result["net_sats"] == 90
 
 
@@ -927,7 +925,7 @@ async def test_certify_credits_nostr_event_claims_match():
     content = json.loads(event_dict["content"])
 
     assert content["amount_sats"] == 1000
-    assert content["tax_paid_sats"] == 20
+    assert content["fee_sats"] == 20
     assert content["net_sats"] == 980
     assert content["dpyc_protocol"] == "dpyp-01-base-certificate"
 
@@ -1000,76 +998,6 @@ async def test_service_status():
     assert "tollbooth_dpyc" in versions
     assert "fastmcp" in versions
 
-
-# ---------------------------------------------------------------------------
-# Deprecated tool shims
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_deprecated_purchase_tax_credits():
-    """Deprecated purchase_tax_credits returns migration guidance."""
-    import tollbooth_authority.server as srv
-
-    result = await srv.purchase_tax_credits(1000)
-
-    assert result["success"] is False
-    assert "purchase_credits" in result["error"]
-    assert "v0.2.0" in result["error"]
-
-
-@pytest.mark.asyncio
-async def test_deprecated_check_tax_payment():
-    """Deprecated check_tax_payment returns migration guidance."""
-    import tollbooth_authority.server as srv
-
-    result = await srv.check_tax_payment("inv-123")
-
-    assert result["success"] is False
-    assert "check_payment" in result["error"]
-    assert "v0.2.0" in result["error"]
-
-
-@pytest.mark.asyncio
-async def test_deprecated_tax_balance():
-    """Deprecated tax_balance returns migration guidance."""
-    import tollbooth_authority.server as srv
-
-    result = await srv.tax_balance()
-
-    assert result["success"] is False
-    assert "check_balance" in result["error"]
-    assert "v0.2.0" in result["error"]
-
-
-@pytest.mark.asyncio
-async def test_deprecated_certify_purchase_delegates():
-    """Deprecated certify_purchase delegates to certify_credits."""
-    import tollbooth_authority.server as srv
-
-    nostr_signer = _make_nostr_signer()
-    settings = _make_settings(tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600)
-
-    ledger = _ledger_with_balance(1000)
-    cache = MagicMock(spec=LedgerCache)
-    cache.get = AsyncMock(return_value=ledger)
-    cache.mark_dirty = MagicMock()
-    cache.flush_user = AsyncMock(return_value=True)
-
-    replay = ReplayTracker(ttl_seconds=600)
-
-    with (
-        patch.object(srv, "_get_settings", return_value=settings),
-        patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
-        patch.object(srv, "_get_ledger_cache", return_value=cache),
-        patch.object(srv, "_get_replay_tracker", return_value=replay),
-    ):
-        result = await srv.certify_purchase("op-1", 1000)
-
-    assert result["success"] is True
-    assert result["fee_sats"] == 20
-    assert result["tax_paid_sats"] == 20
-    assert result["net_sats"] == 980
 
 
 # ---------------------------------------------------------------------------

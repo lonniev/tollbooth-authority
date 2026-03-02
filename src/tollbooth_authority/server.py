@@ -24,7 +24,7 @@ from tollbooth import BTCPayClient, BTCPayError, LedgerCache, ToolPricing
 from tollbooth.tools.credits import (
     check_balance_tool,
     check_payment_tool,
-    purchase_tax_credits_tool,
+    direct_purchase_tool,
     reconcile_pending_invoices,
 )
 
@@ -484,7 +484,7 @@ async def purchase_credits(
     cache = _get_ledger_cache()
     s = _get_settings()
 
-    return await purchase_tax_credits_tool(
+    return await direct_purchase_tool(
         btcpay, cache, user_id, amount_sats,
         tier_config_json=s.btcpay_tier_config,
         user_tiers_json=s.btcpay_user_tiers,
@@ -729,7 +729,6 @@ async def certify_credits(
         jti: Unique certificate ID (for audit/anti-replay).
         amount_sats: The original purchase amount.
         fee_sats: Certification fee deducted from operator balance.
-        tax_paid_sats: Same as fee_sats (backward compatibility).
         net_sats: amount_sats minus fee (what the user effectively receives).
         expires_at: Unix timestamp when the certificate expires.
 
@@ -792,7 +791,7 @@ async def certify_credits(
     claims = {
         "sub": operator_id,
         "amount_sats": amount_sats,
-        "tax_paid_sats": fee_sats,
+        "fee_sats": fee_sats,
         "net_sats": net_sats,
         "dpyc_protocol": "dpyp-01-base-certificate",
     }
@@ -817,7 +816,6 @@ async def certify_credits(
         "jti": jti,
         "amount_sats": amount_sats,
         "fee_sats": fee_sats,
-        "tax_paid_sats": fee_sats,  # backward compatibility
         "net_sats": net_sats,
         "expires_at": expiration,
     }
@@ -839,9 +837,9 @@ async def report_upstream_purchase(
     """Report a completed upstream cert-sats purchase to replenish local supply.
 
     Admin tool. After the Authority admin manually purchases cert-sats from
-    the upstream Authority (via purchase_tax_credits + check_tax_payment on
+    the upstream Authority (via purchase_credits + check_payment on
     the upstream), call this to credit the local supply ledger so that
-    certify_purchase can proceed.
+    certify_credits can proceed.
 
     Returns:
         success: True if the supply was credited.
@@ -940,82 +938,74 @@ async def check_dpyc_membership(npub: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Deprecated tool shims (v0.1.x names — remove after one release cycle)
+# Account Statement Tools
 # ---------------------------------------------------------------------------
 
 
 @mcp.tool()
-async def purchase_tax_credits(
-    amount_sats: Annotated[
-        int,
-        Field(description="Deprecated — use purchase_credits instead."),
-    ],
-) -> dict[str, Any]:
-    """Deprecated — use purchase_credits instead.
+async def account_statement() -> dict[str, Any]:
+    """Get a structured JSON account statement for the current operator.
 
-    This tool name was renamed in v0.2.0. Call purchase_credits with the
-    same parameters for identical behavior.
+    Returns the operator's credit balance, deposit history, fees paid,
+    total certified amount, active tranches, and the Authority's fee schedule.
     """
+    try:
+        user_id = _get_effective_user_id()
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+
+    cache = _get_ledger_cache()
+    s = _get_settings()
+    ledger = await cache.get(user_id)
+
+    tranches = [
+        {
+            "granted_at": t.granted_at.isoformat() if hasattr(t.granted_at, "isoformat") else str(t.granted_at),
+            "original_sats": t.original_sats,
+            "remaining_sats": t.remaining_sats,
+            "invoice_id": t.invoice_id,
+        }
+        for t in ledger.tranches
+        if t.remaining_sats > 0
+    ]
+
     return {
-        "success": False,
-        "error": (
-            "purchase_tax_credits has been renamed to purchase_credits in v0.2.0. "
-            "Please call purchase_credits(amount_sats=...) instead."
-        ),
+        "success": True,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "account_summary": {
+            "balance_sats": ledger.balance_api_sats,
+            "total_deposited_sats": ledger.total_deposited_api_sats,
+            "total_fees_paid_sats": ledger.total_consumed_api_sats,
+            "total_certified_sats": sum(
+                t.original_sats - t.remaining_sats
+                for t in ledger.tranches
+            ),
+        },
+        "active_tranches": tranches,
+        "fee_schedule": {
+            "rate_percent": s.certify_pricing.rate_percent,
+            "min_sats": s.certify_pricing.min_cost,
+        },
     }
 
 
 @mcp.tool()
-async def check_tax_payment(
-    invoice_id: Annotated[
-        str,
-        Field(description="Deprecated — use check_payment instead."),
-    ],
-) -> dict[str, Any]:
-    """Deprecated — use check_payment instead.
+async def account_statement_infographic() -> dict[str, Any]:
+    """Get a visual SVG infographic of the operator's account statement.
 
-    This tool name was renamed in v0.2.0. Call check_payment with the
-    same parameters for identical behavior.
+    Returns the same data as account_statement, plus an SVG rendering
+    suitable for display in an AI chat or dashboard.
     """
+    from tollbooth_authority.infographic import render_operator_infographic
+
+    data = await account_statement()
+    if not data.get("success"):
+        return data
+
+    svg = render_operator_infographic(data)
     return {
-        "success": False,
-        "error": (
-            "check_tax_payment has been renamed to check_payment in v0.2.0. "
-            "Please call check_payment(invoice_id=...) instead."
-        ),
+        "success": True,
+        "svg": svg,
+        "data": data,
     }
 
-
-@mcp.tool()
-async def tax_balance() -> dict[str, Any]:
-    """Deprecated — use check_balance instead.
-
-    This tool name was renamed in v0.2.0. Call check_balance for identical behavior.
-    """
-    return {
-        "success": False,
-        "error": (
-            "tax_balance has been renamed to check_balance in v0.2.0. "
-            "Please call check_balance() instead."
-        ),
-    }
-
-
-@mcp.tool()
-async def certify_purchase(
-    operator_id: Annotated[
-        str,
-        Field(description="The operator's DPYC npub."),
-    ],
-    amount_sats: Annotated[
-        int,
-        Field(description="The total purchase amount in satoshis."),
-    ],
-) -> dict[str, Any]:
-    """Deprecated — use certify_credits instead.
-
-    This shim delegates to certify_credits for backward compatibility.
-    Downstream MCP servers that call certify_purchase will continue to work
-    during the migration period.
-    """
-    return await certify_credits(operator_id=operator_id, amount_sats=amount_sats)

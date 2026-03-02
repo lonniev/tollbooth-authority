@@ -34,7 +34,7 @@ def test_sign_certificate_event_produces_valid_json(nostr_signer: AuthorityNostr
     claims = {
         "sub": "npub1operator",
         "amount_sats": 1000,
-        "tax_paid_sats": 20,
+        "fee_sats": 20,
         "net_sats": 980,
         "dpyc_protocol": "dpyp-01-base-certificate",
     }
@@ -56,7 +56,7 @@ def test_event_has_correct_tags(nostr_signer: AuthorityNostrSigner):
     claims = {
         "sub": "npub1operator",
         "amount_sats": 500,
-        "tax_paid_sats": 10,
+        "fee_sats": 10,
         "net_sats": 490,
         "dpyc_protocol": "dpyp-01-base-certificate",
     }
@@ -88,7 +88,7 @@ def test_event_content_contains_claims(nostr_signer: AuthorityNostrSigner):
     claims = {
         "sub": "npub1operator",
         "amount_sats": 1000,
-        "tax_paid_sats": 20,
+        "fee_sats": 20,
         "net_sats": 980,
         "dpyc_protocol": "dpyp-01-base-certificate",
     }
@@ -111,7 +111,7 @@ def test_event_verifies_with_pynostr(nostr_signer: AuthorityNostrSigner):
     claims = {
         "sub": "npub1operator",
         "amount_sats": 1000,
-        "tax_paid_sats": 20,
+        "fee_sats": 20,
         "net_sats": 980,
         "dpyc_protocol": "dpyp-01-base-certificate",
     }
@@ -131,7 +131,7 @@ def test_event_pubkey_matches_signer(nostr_signer: AuthorityNostrSigner):
     claims = {
         "sub": "op-1",
         "amount_sats": 100,
-        "tax_paid_sats": 2,
+        "fee_sats": 2,
         "net_sats": 98,
         "dpyc_protocol": "dpyp-01-base-certificate",
     }
@@ -150,7 +150,7 @@ def test_different_jti_produces_different_events(nostr_signer: AuthorityNostrSig
     claims = {
         "sub": "op-1",
         "amount_sats": 100,
-        "tax_paid_sats": 2,
+        "fee_sats": 2,
         "net_sats": 98,
         "dpyc_protocol": "dpyp-01-base-certificate",
     }

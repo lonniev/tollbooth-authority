@@ -54,7 +54,7 @@ class AuthorityNostrSigner:
         """Build and sign a kind 30079 Nostr event.
 
         Args:
-            claims: Certificate claims dict (sub, amount_sats, tax_paid_sats,
+            claims: Certificate claims dict (sub, amount_sats, fee_sats,
                 net_sats, dpyc_protocol). Serialized as the event content.
             jti: Unique certificate ID (goes in the d-tag for NIP-33).
             operator_npub: Operator's npub (goes in the p-tag).
@@ -67,7 +67,7 @@ class AuthorityNostrSigner:
         content_claims = {
             "sub": claims.get("sub", ""),
             "amount_sats": claims.get("amount_sats", 0),
-            "tax_paid_sats": claims.get("tax_paid_sats", 0),
+            "fee_sats": claims.get("fee_sats", 0),
             "net_sats": claims.get("net_sats", 0),
             "dpyc_protocol": claims.get("dpyc_protocol", ""),
         }
