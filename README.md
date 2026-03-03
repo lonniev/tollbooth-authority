@@ -107,6 +107,30 @@ To run your own Authority instance, set these environment variables:
 | `TAX_MIN_SATS` | Minimum fee per certification in satoshis | `10` (default) |
 | `CERTIFICATE_TTL_SECONDS` | How long a signed certificate remains valid | `600` (default, 10 minutes) |
 
+## Actor Protocol
+
+The `AuthorityActor` class (in `actor.py`) satisfies `AuthorityProtocol` from [tollbooth-dpyc](https://github.com/lonniev/tollbooth-dpyc). It's a thin delegation layer — every method lazy-imports the corresponding `@mcp.tool()` function from `server.py`. No business logic lives in the actor.
+
+```python
+from tollbooth_authority import AuthorityActor
+from tollbooth import AuthorityProtocol
+
+assert isinstance(AuthorityActor(), AuthorityProtocol)
+```
+
+The actor exposes two additional capabilities for downstream infrastructure:
+
+- **`slug`** — returns `"authority"` for tool-name prefixing
+- **`tool_catalog()`** — returns `list[ToolPathInfo]` metadata (tool name, path type, cost tier, agent hints) for all 11 tools
+
+All 11 protocol methods are fully implemented:
+
+| Path | Tools |
+|------|-------|
+| Hot (local ledger) | `certify_credits`, `register_operator`, `operator_status`, `check_balance`, `account_statement`, `account_statement_infographic`, `service_status`, `report_upstream_purchase` |
+| Cold (BTCPay) | `purchase_credits`, `check_payment` |
+| Cold (registry) | `check_dpyc_membership` |
+
 ## MCP Tools
 
 | Tool | Purpose |
