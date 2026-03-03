@@ -21,6 +21,7 @@ from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_headers
 
 from tollbooth import BTCPayClient, BTCPayError, LedgerCache, ToolPricing
+from tollbooth.slug_tools import make_slug_tool
 from tollbooth.tools.credits import (
     check_balance_tool,
     check_payment_tool,
@@ -105,6 +106,7 @@ mcp = FastMCP(
         "If unset, all operators receive the default 1x multiplier.\n"
     ),
 )
+tool = make_slug_tool(mcp, "authority")
 
 # ---------------------------------------------------------------------------
 # Settings (deferred — never at import time)
@@ -417,7 +419,7 @@ SUPPLY_USER_ID = "__upstream_supply__"
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool()
+@tool
 async def register_operator(
     npub: Annotated[
         str,
@@ -479,7 +481,7 @@ async def register_operator(
     }
 
 
-@mcp.tool()
+@tool
 async def purchase_credits(
     amount_sats: Annotated[
         int,
@@ -531,7 +533,7 @@ async def purchase_credits(
     )
 
 
-@mcp.tool()
+@tool
 async def check_payment(
     invoice_id: Annotated[
         str,
@@ -580,7 +582,7 @@ async def check_payment(
     )
 
 
-@mcp.tool()
+@tool
 async def check_balance() -> dict[str, Any]:
     """Check your current operator credit balance, total deposited, total consumed, and pending invoices.
 
@@ -630,7 +632,7 @@ async def check_balance() -> dict[str, Any]:
     )
 
 
-@mcp.tool()
+@tool
 async def operator_status() -> dict[str, Any]:
     """View your registration status, balance summary, and the Authority's Nostr npub.
 
@@ -701,7 +703,7 @@ async def operator_status() -> dict[str, Any]:
     return result
 
 
-@mcp.tool()
+@tool
 async def service_status() -> dict[str, Any]:
     """Diagnostic: report this service's software versions and runtime info.
 
@@ -724,7 +726,7 @@ async def service_status() -> dict[str, Any]:
     }
 
 
-@mcp.tool()
+@tool
 async def certify_credits(
     operator_id: Annotated[
         str,
@@ -860,7 +862,7 @@ async def certify_credits(
     }
 
 
-@mcp.tool()
+@tool
 async def report_upstream_purchase(
     amount_sats: Annotated[
         int,
@@ -930,7 +932,7 @@ async def report_upstream_purchase(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool()
+@tool
 async def activate_dpyc(npub: str) -> dict[str, Any]:
     """Deprecated — npub is now set during register_operator.
 
@@ -948,7 +950,7 @@ async def activate_dpyc(npub: str) -> dict[str, Any]:
     }
 
 
-@mcp.tool()
+@tool
 async def check_dpyc_membership(npub: str) -> dict[str, Any]:
     """Diagnostic: look up an npub in the DPYC community registry.
 
@@ -981,7 +983,7 @@ async def check_dpyc_membership(npub: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool()
+@tool
 async def account_statement() -> dict[str, Any]:
     """Get a structured JSON account statement for the current operator.
 
@@ -1028,7 +1030,7 @@ async def account_statement() -> dict[str, Any]:
     }
 
 
-@mcp.tool()
+@tool
 async def account_statement_infographic() -> dict[str, Any]:
     """Get a visual SVG infographic of the operator's account statement.
 
