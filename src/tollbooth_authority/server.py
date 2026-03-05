@@ -432,10 +432,20 @@ async def register_operator(
         ),
     ] = "",
 ) -> dict[str, Any]:
-    """Register as an operator on the Tollbooth turnpike via Horizon OAuth identity.
+    """Provision an operator in the Authority ledger via Horizon OAuth identity.
 
-    Call this first. Creates a ledger entry for the authenticated operator so
-    they can purchase credits and certify purchase orders. Idempotent — safe
+    This is the **Authority-side** handler for operator registration.
+    In the full DPYC flow, a requester sends a Nostr DM delegation
+    request to this Authority's npub; the Authority then calls this tool
+    to provision the new Operator.  Currently implemented as a direct
+    MCP tool call (Horizon OAuth), pending the DM-based approval workflow.
+
+    Not to be confused with **citizen** registration, which the Operator
+    handles directly via the Oracle's request_citizenship /
+    confirm_citizenship flow — no Authority involvement.
+
+    Creates a ledger entry for the authenticated operator so they can
+    purchase credits and certify purchase orders. Idempotent — safe
     to call again if already registered (returns current balance).
 
     Your DPYC npub (Nostr public key) is required — it serves as your
