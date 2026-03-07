@@ -903,19 +903,26 @@ async def report_upstream_purchase(
         return {"success": False, "error": "amount_sats must be positive."}
 
     # Admin authorization: only the Authority admin may report upstream purchases.
-    # The Authority's own npub is derived from its NSEC — no env var needed.
-    try:
-        signer = _get_nostr_signer()
-    except ValueError:
-        return {
-            "success": False,
-            "error": "Admin authorization not configured. Set TOLLBOOTH_NOSTR_OPERATOR_NSEC.",
-        }
+    # Check against DPYC_AUTHORITY_ADMIN_NPUB (operator's personal npub) first,
+    # then fall back to the Authority's own signer npub for backward compat.
+    import os
+
+    admin_npub = os.environ.get("DPYC_AUTHORITY_ADMIN_NPUB")
+    if not admin_npub:
+        try:
+            signer = _get_nostr_signer()
+            admin_npub = signer.npub
+        except ValueError:
+            return {
+                "success": False,
+                "error": "Admin authorization not configured. "
+                "Set DPYC_AUTHORITY_ADMIN_NPUB or TOLLBOOTH_NOSTR_OPERATOR_NSEC.",
+            }
     try:
         caller_npub = _get_effective_user_id()
     except ValueError as e:
         return {"success": False, "error": str(e)}
-    if caller_npub != signer.npub:
+    if caller_npub != admin_npub:
         return {
             "success": False,
             "error": "Unauthorized. Only the Authority admin may report upstream purchases.",
