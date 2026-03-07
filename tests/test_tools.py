@@ -1057,12 +1057,12 @@ async def test_report_upstream_purchase_no_dpyc_session():
 
 
 @pytest.mark.asyncio
-async def test_report_upstream_purchase_admin_via_env_var(monkeypatch):
-    """report_upstream_purchase accepts caller matching DPYC_AUTHORITY_ADMIN_NPUB."""
+async def test_report_upstream_purchase_via_authority_npub(monkeypatch):
+    """report_upstream_purchase accepts caller matching DPYC_AUTHORITY_NPUB."""
     import tollbooth_authority.server as srv
 
-    admin_npub = "npub1" + "b" * 58
-    monkeypatch.setenv("DPYC_AUTHORITY_ADMIN_NPUB", admin_npub)
+    operator_npub = "npub1" + "b" * 58
+    monkeypatch.setenv("DPYC_AUTHORITY_NPUB", operator_npub)
 
     supply_ledger = _ledger_with_balance(500)
     cache = MagicMock(spec=LedgerCache)
@@ -1070,10 +1070,10 @@ async def test_report_upstream_purchase_admin_via_env_var(monkeypatch):
     cache.mark_dirty = MagicMock()
     cache.flush_user = AsyncMock(return_value=True)
 
-    srv._dpyc_sessions["admin-env"] = admin_npub
+    srv._dpyc_sessions["op-env"] = operator_npub
 
     with (
-        patch.object(srv, "_require_user_id", return_value="admin-env"),
+        patch.object(srv, "_require_user_id", return_value="op-env"),
         patch.object(srv, "_get_ledger_cache", return_value=cache),
     ):
         result = await srv.report_upstream_purchase(200)
@@ -1083,15 +1083,15 @@ async def test_report_upstream_purchase_admin_via_env_var(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_report_upstream_purchase_env_var_rejects_non_admin(monkeypatch):
-    """report_upstream_purchase rejects caller not matching DPYC_AUTHORITY_ADMIN_NPUB."""
+async def test_report_upstream_purchase_authority_npub_rejects_non_operator(monkeypatch):
+    """report_upstream_purchase rejects caller not matching DPYC_AUTHORITY_NPUB."""
     import tollbooth_authority.server as srv
 
-    admin_npub = "npub1" + "b" * 58
-    non_admin_npub = "npub1" + "c" * 58
-    monkeypatch.setenv("DPYC_AUTHORITY_ADMIN_NPUB", admin_npub)
+    operator_npub = "npub1" + "b" * 58
+    other_npub = "npub1" + "c" * 58
+    monkeypatch.setenv("DPYC_AUTHORITY_NPUB", operator_npub)
 
-    srv._dpyc_sessions["caller-env"] = non_admin_npub
+    srv._dpyc_sessions["caller-env"] = other_npub
 
     with patch.object(srv, "_require_user_id", return_value="caller-env"):
         result = await srv.report_upstream_purchase(200)
