@@ -1054,3 +1054,47 @@ async def test_report_upstream_purchase_no_dpyc_session():
 
     assert result["success"] is False
     assert "No DPYC identity active" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_report_upstream_purchase_admin_via_env_var(monkeypatch):
+    """report_upstream_purchase accepts caller matching DPYC_AUTHORITY_ADMIN_NPUB."""
+    import tollbooth_authority.server as srv
+
+    admin_npub = "npub1" + "b" * 58
+    monkeypatch.setenv("DPYC_AUTHORITY_ADMIN_NPUB", admin_npub)
+
+    supply_ledger = _ledger_with_balance(500)
+    cache = MagicMock(spec=LedgerCache)
+    cache.get = AsyncMock(return_value=supply_ledger)
+    cache.mark_dirty = MagicMock()
+    cache.flush_user = AsyncMock(return_value=True)
+
+    srv._dpyc_sessions["admin-env"] = admin_npub
+
+    with (
+        patch.object(srv, "_require_user_id", return_value="admin-env"),
+        patch.object(srv, "_get_ledger_cache", return_value=cache),
+    ):
+        result = await srv.report_upstream_purchase(200)
+
+    assert result["success"] is True
+    assert result["credited_sats"] == 200
+
+
+@pytest.mark.asyncio
+async def test_report_upstream_purchase_env_var_rejects_non_admin(monkeypatch):
+    """report_upstream_purchase rejects caller not matching DPYC_AUTHORITY_ADMIN_NPUB."""
+    import tollbooth_authority.server as srv
+
+    admin_npub = "npub1" + "b" * 58
+    non_admin_npub = "npub1" + "c" * 58
+    monkeypatch.setenv("DPYC_AUTHORITY_ADMIN_NPUB", admin_npub)
+
+    srv._dpyc_sessions["caller-env"] = non_admin_npub
+
+    with patch.object(srv, "_require_user_id", return_value="caller-env"):
+        result = await srv.report_upstream_purchase(200)
+
+    assert result["success"] is False
+    assert "Unauthorized" in result["error"]
