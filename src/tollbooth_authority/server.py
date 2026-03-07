@@ -742,9 +742,6 @@ async def check_payment(
         tier_config_json=s.btcpay_tier_config,
         user_tiers_json=s.btcpay_user_tiers,
         default_credit_ttl_seconds=None,  # Authority balances never expire
-        royalty_address=s.upstream_authority_address or None,
-        royalty_percent=s.upstream_tax_percent / 100,
-        royalty_min_sats=s.upstream_tax_min_sats,
     )
 
 
@@ -936,7 +933,7 @@ async def certify_credits(
         jti: Unique certificate ID (for audit/anti-replay).
         amount_sats: The original purchase amount.
         fee_sats: Certification fee deducted from operator balance.
-        net_sats: amount_sats minus fee (what the user effectively receives).
+        net_sats: operator accounting — effective margin after fee; not the invoice amount.
         expires_at: Unix timestamp when the certificate expires.
 
     On 'Insufficient credit balance' error: call purchase_credits to top up,
