@@ -93,6 +93,37 @@ _CATALOG: list[ToolPathInfo] = [
         cost_tier="FREE",
         agent_hint="Check whether an npub is a registered DPYC member.",
     ),
+    # ── Authority onboarding (Nostr DM challenge-response) ────
+    ToolPathInfo(
+        tool_name="register_authority_npub",
+        path=ToolPath.COLD,
+        requires_auth=False,
+        cost_tier="FREE",
+        agent_hint=(
+            "Step 1/3 of Authority onboarding. Sends a Nostr DM challenge "
+            "to the candidate npub. The candidate must reply in their Nostr client."
+        ),
+    ),
+    ToolPathInfo(
+        tool_name="confirm_authority_claim",
+        path=ToolPath.COLD,
+        requires_auth=False,
+        cost_tier="FREE",
+        agent_hint=(
+            "Step 2/3 of Authority onboarding. Verifies candidate's DM reply "
+            "and escalates to Prime Authority for approval."
+        ),
+    ),
+    ToolPathInfo(
+        tool_name="check_authority_approval",
+        path=ToolPath.COLD,
+        requires_auth=False,
+        cost_tier="FREE",
+        agent_hint=(
+            "Step 3/3 of Authority onboarding. Checks if Prime approved, "
+            "persists curator npub, registers Authority in Oracle registry."
+        ),
+    ),
 ]
 
 
@@ -177,3 +208,26 @@ class AuthorityActor:
         from tollbooth_authority.server import check_dpyc_membership
 
         return await check_dpyc_membership(npub=npub)
+
+    # ── Authority onboarding ─────────────────────────────────────
+
+    async def register_authority_npub(
+        self, candidate_npub: str
+    ) -> dict[str, Any]:
+        from tollbooth_authority.server import register_authority_npub
+
+        return await register_authority_npub(candidate_npub=candidate_npub)
+
+    async def confirm_authority_claim(
+        self, candidate_npub: str
+    ) -> dict[str, Any]:
+        from tollbooth_authority.server import confirm_authority_claim
+
+        return await confirm_authority_claim(candidate_npub=candidate_npub)
+
+    async def check_authority_approval(
+        self, candidate_npub: str
+    ) -> dict[str, Any]:
+        from tollbooth_authority.server import check_authority_approval
+
+        return await check_authority_approval(candidate_npub=candidate_npub)

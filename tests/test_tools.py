@@ -1098,3 +1098,188 @@ async def test_report_upstream_purchase_authority_npub_rejects_non_operator(monk
 
     assert result["success"] is False
     assert "Unauthorized" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# Authority onboarding tools
+# ---------------------------------------------------------------------------
+
+ONBOARDING_NPUB = "npub1l94pd4qu4eszrl6ek032ftcnsu3tt9a7xvq2zp7eaxeklp6mrpzssmq8pf"
+
+
+@pytest.fixture(autouse=True)
+def _reset_onboarding_state():
+    """Reset onboarding state before each test."""
+    import tollbooth_authority.server as srv
+    srv._onboarding.complete()
+    srv._cached_authority_npub = None
+    yield
+    srv._onboarding.complete()
+    srv._cached_authority_npub = None
+
+
+@pytest.mark.asyncio
+async def test_register_authority_npub_sends_dm():
+    """register_authority_npub sends a DM via exchange.open_channel."""
+    import tollbooth_authority.server as srv
+
+    mock_exchange = MagicMock()
+    mock_exchange.open_channel = AsyncMock(return_value={
+        "success": True,
+        "message": "DM sent.",
+    })
+
+    with (
+        patch.object(srv, "_get_authority_npub", new_callable=AsyncMock, return_value=None),
+        patch.object(srv, "_get_nostr_exchange", return_value=mock_exchange),
+    ):
+        result = await srv.register_authority_npub(ONBOARDING_NPUB)
+
+    assert result["success"] is True
+    assert result["phase"] == "claim"
+    mock_exchange.open_channel.assert_called_once()
+    call_kwargs = mock_exchange.open_channel.call_args
+    assert call_kwargs[0][0] == "authority_claim"
+    assert call_kwargs[1]["recipient_npub"] == ONBOARDING_NPUB
+
+
+@pytest.mark.asyncio
+async def test_register_authority_npub_rejects_existing_curator():
+    """register_authority_npub rejects if Authority already has a curator."""
+    import tollbooth_authority.server as srv
+
+    with patch.object(
+        srv, "_get_authority_npub", new_callable=AsyncMock,
+        return_value="npub1existing...",
+    ):
+        result = await srv.register_authority_npub(ONBOARDING_NPUB)
+
+    assert result["success"] is False
+    assert "already has a curator" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_register_authority_npub_rejects_invalid_npub():
+    import tollbooth_authority.server as srv
+
+    with patch.object(
+        srv, "_get_authority_npub", new_callable=AsyncMock, return_value=None,
+    ):
+        result = await srv.register_authority_npub("not-an-npub")
+
+    assert result["success"] is False
+    assert "Invalid npub" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_confirm_authority_claim_success():
+    """confirm_authority_claim verifies DM and sends approval to Prime."""
+    import tollbooth_authority.server as srv
+
+    # Pre-set onboarding state to "claim" phase
+    srv._onboarding.start_claim(ONBOARDING_NPUB)
+
+    mock_exchange = MagicMock()
+    mock_exchange.receive = AsyncMock(return_value={
+        "success": True,
+        "credentials": {"claim": "yes"},
+    })
+    mock_exchange.open_channel = AsyncMock(return_value={
+        "success": True,
+        "message": "Approval DM sent.",
+    })
+
+    prime = "npub1primeauthority" + "x" * 47
+    signer = _make_nostr_signer()
+
+    with (
+        patch.object(srv, "_get_nostr_exchange", return_value=mock_exchange),
+        patch.object(srv, "_resolve_prime_npub", new_callable=AsyncMock, return_value=prime),
+        patch.object(srv, "_get_nostr_signer", return_value=signer),
+    ):
+        result = await srv.confirm_authority_claim(ONBOARDING_NPUB)
+
+    assert result["success"] is True
+    assert result["phase"] == "approval"
+    assert result["prime_npub"] == prime
+
+    # Verify receive was called for the claim
+    mock_exchange.receive.assert_called_once()
+    # Verify approval DM was sent to Prime
+    mock_exchange.open_channel.assert_called_once()
+    approval_call = mock_exchange.open_channel.call_args
+    assert approval_call[0][0] == "authority_approval"
+    assert approval_call[1]["recipient_npub"] == prime
+
+
+@pytest.mark.asyncio
+async def test_confirm_authority_claim_no_dm():
+    """confirm_authority_claim fails when no DM received."""
+    import tollbooth_authority.server as srv
+
+    srv._onboarding.start_claim(ONBOARDING_NPUB)
+
+    mock_exchange = MagicMock()
+    mock_exchange.receive = AsyncMock(
+        side_effect=Exception("CourierTimeout: no matching DM found"),
+    )
+
+    with patch.object(srv, "_get_nostr_exchange", return_value=mock_exchange):
+        result = await srv.confirm_authority_claim(ONBOARDING_NPUB)
+
+    assert result["success"] is False
+    assert "No valid claim DM" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_check_authority_approval_success():
+    """check_authority_approval persists npub on Prime approval."""
+    import tollbooth_authority.server as srv
+
+    prime = "npub1primeauthority" + "x" * 47
+    srv._onboarding.start_claim(ONBOARDING_NPUB)
+    srv._onboarding.promote_to_approval(prime)
+
+    mock_exchange = MagicMock()
+    mock_exchange.receive = AsyncMock(return_value={
+        "success": True,
+        "credentials": {"approval": "yes"},
+    })
+
+    signer = _make_nostr_signer()
+
+    with (
+        patch.object(srv, "_get_nostr_exchange", return_value=mock_exchange),
+        patch.object(srv, "_set_authority_npub", new_callable=AsyncMock) as mock_set,
+        patch.object(srv, "_get_nostr_signer", return_value=signer),
+        patch.object(srv, "_resolve_own_service_url", new_callable=AsyncMock, return_value="https://example.com/mcp"),
+        patch.object(srv, "_register_via_oracle", new_callable=AsyncMock, return_value="https://github.com/commit/abc"),
+    ):
+        result = await srv.check_authority_approval(ONBOARDING_NPUB)
+
+    assert result["success"] is True
+    assert result["activated"] is True
+    mock_set.assert_called_once_with(ONBOARDING_NPUB)
+    # Onboarding state should be cleared
+    assert srv._onboarding.get() is None
+
+
+@pytest.mark.asyncio
+async def test_check_authority_approval_no_response():
+    """check_authority_approval fails when Prime hasn't responded."""
+    import tollbooth_authority.server as srv
+
+    prime = "npub1primeauthority" + "x" * 47
+    srv._onboarding.start_claim(ONBOARDING_NPUB)
+    srv._onboarding.promote_to_approval(prime)
+
+    mock_exchange = MagicMock()
+    mock_exchange.receive = AsyncMock(
+        side_effect=Exception("CourierTimeout: no matching DM found"),
+    )
+
+    with patch.object(srv, "_get_nostr_exchange", return_value=mock_exchange):
+        result = await srv.check_authority_approval(ONBOARDING_NPUB)
+
+    assert result["success"] is False
+    assert "No approval received" in result["error"]
