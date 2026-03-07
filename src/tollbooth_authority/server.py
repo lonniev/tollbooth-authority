@@ -31,6 +31,10 @@ from tollbooth.tools.credits import (
 
 from tollbooth_authority import __version__
 from tollbooth_authority.config import AuthoritySettings
+from tollbooth_authority.onboarding import (
+    OnboardingState,
+    ONBOARDING_TEMPLATES,
+)
 from tollbooth_authority.registry import DPYCRegistry, RegistryError
 from tollbooth_authority.replay import ReplayTracker
 from tollbooth_authority.nostr_signing import AuthorityNostrSigner
@@ -283,6 +287,158 @@ def _get_replay_tracker() -> ReplayTracker:
     s = _get_settings()
     _replay_tracker = ReplayTracker(ttl_seconds=s.certificate_ttl_seconds)
     return _replay_tracker
+
+
+# ---------------------------------------------------------------------------
+# Authority onboarding (curator npub + Nostr DM challenge-response)
+# ---------------------------------------------------------------------------
+
+_onboarding = OnboardingState()
+_config_vault: Any = None
+_cached_authority_npub: str | None = None
+
+
+def _get_config_vault() -> Any:
+    """Return a NeonVault for authority_config reads/writes, or None."""
+    global _config_vault
+    if _config_vault is not None:
+        return _config_vault
+    s = _get_settings()
+    if not s.neon_database_url:
+        return None
+    from tollbooth.vaults import NeonVault
+    _config_vault = NeonVault(database_url=s.neon_database_url)
+    return _config_vault
+
+
+async def _get_authority_npub() -> str | None:
+    """Read the curator npub: NeonVault → env var → None."""
+    global _cached_authority_npub
+    if _cached_authority_npub is not None:
+        return _cached_authority_npub
+    vault = _get_config_vault()
+    if vault is not None:
+        try:
+            npub = await vault.get_config("authority_npub")
+            if npub:
+                _cached_authority_npub = npub
+                return npub
+        except Exception:
+            pass
+    import os
+    npub = os.environ.get("DPYC_AUTHORITY_NPUB")
+    if npub:
+        _cached_authority_npub = npub
+    return npub
+
+
+async def _set_authority_npub(npub: str) -> None:
+    """Persist the curator npub to NeonVault and update cache."""
+    global _cached_authority_npub
+    vault = _get_config_vault()
+    if vault is not None:
+        await vault.set_config("authority_npub", npub)
+    _cached_authority_npub = npub
+
+
+def _get_nostr_exchange() -> Any:
+    """Create a NostrCredentialExchange for onboarding DMs."""
+    from tollbooth.nostr_credentials import NostrCredentialExchange
+
+    s = _get_settings()
+    if not s.tollbooth_nostr_operator_nsec:
+        raise ValueError(
+            "TOLLBOOTH_NOSTR_OPERATOR_NSEC is required for Authority onboarding."
+        )
+    relays = _resolve_relays(s.tollbooth_nostr_relays or None)
+    return NostrCredentialExchange(
+        nsec=s.tollbooth_nostr_operator_nsec,
+        relays=relays,
+        templates=ONBOARDING_TEMPLATES,
+        credential_vault=None,  # no caching for onboarding DMs
+    )
+
+
+async def _resolve_prime_npub() -> str:
+    """Find the Prime Authority's npub from the DPYC registry."""
+    s = _get_settings()
+    registry = DPYCRegistry(
+        url=s.dpyc_registry_url,
+        cache_ttl_seconds=s.dpyc_registry_cache_ttl_seconds,
+    )
+    try:
+        members = await registry._fetch()
+        for m in members:
+            if m.get("role") == "prime_authority" and m.get("status") == "active":
+                return m["npub"]
+        raise ValueError("No active Prime Authority found in registry.")
+    finally:
+        await registry.close()
+
+
+async def _resolve_own_service_url() -> str:
+    """Resolve this Authority's service URL from the DPYC registry."""
+    signer = _get_nostr_signer()
+    s = _get_settings()
+    registry = DPYCRegistry(
+        url=s.dpyc_registry_url,
+        cache_ttl_seconds=s.dpyc_registry_cache_ttl_seconds,
+    )
+    try:
+        member = await registry.check_membership(signer.npub)
+        services = member.get("services", [])
+        if services:
+            return services[0]["url"]
+        raise ValueError(
+            f"Authority {signer.npub[:16]}... has no services registered."
+        )
+    except RegistryError:
+        raise ValueError(
+            f"Authority {signer.npub[:16]}... not found in DPYC registry. "
+            "Register as a member first."
+        )
+    finally:
+        await registry.close()
+
+
+async def _register_via_oracle(
+    authority_npub: str,
+    display_name: str,
+    service_url: str,
+    upstream_authority_npub: str,
+) -> str:
+    """Call the Oracle's register_authority tool via MCP-to-MCP."""
+    from tollbooth.registry import resolve_oracle_service
+
+    signer = _get_nostr_signer()
+    oracle_info = await resolve_oracle_service(signer.npub)
+    oracle_url = oracle_info["url"]
+
+    from fastmcp import Client
+
+    async with Client(oracle_url, auth="oauth") as client:
+        result = await client.call_tool(
+            "register_authority",
+            {
+                "authority_npub": authority_npub,
+                "display_name": display_name,
+                "service_url": service_url,
+                "upstream_authority_npub": upstream_authority_npub,
+            },
+        )
+        # Parse CallToolResult
+        if hasattr(result, "data") and result.data:
+            return result.data.get("commit_url", "")
+        if hasattr(result, "content"):
+            for block in result.content:
+                if hasattr(block, "text"):
+                    import json
+                    try:
+                        data = json.loads(block.text)
+                        return data.get("commit_url", "")
+                    except (json.JSONDecodeError, TypeError):
+                        return block.text
+        return str(result)
 
 
 # ---------------------------------------------------------------------------
@@ -903,10 +1059,8 @@ async def report_upstream_purchase(
         return {"success": False, "error": "amount_sats must be positive."}
 
     # Authorization: only the Authority Operator may report upstream purchases.
-    # Check DPYC_AUTHORITY_NPUB first, fall back to signer npub for backward compat.
-    import os
-
-    authority_npub = os.environ.get("DPYC_AUTHORITY_NPUB")
+    # Check vault-persisted npub first, fall back to signer npub.
+    authority_npub = await _get_authority_npub()
     if not authority_npub:
         try:
             signer = _get_nostr_signer()
@@ -915,7 +1069,7 @@ async def report_upstream_purchase(
             return {
                 "success": False,
                 "error": "Authority identity not configured. "
-                "Set DPYC_AUTHORITY_NPUB or TOLLBOOTH_NOSTR_OPERATOR_NSEC.",
+                "Complete Authority onboarding or set DPYC_AUTHORITY_NPUB.",
             }
     try:
         caller_npub = _get_effective_user_id()
@@ -992,6 +1146,300 @@ async def check_dpyc_membership(npub: str) -> dict[str, Any]:
         return {"success": False, "error": str(e)}
     finally:
         await registry.close()
+
+
+# ---------------------------------------------------------------------------
+# Authority Onboarding Tools (3-step Nostr DM challenge-response)
+# ---------------------------------------------------------------------------
+
+
+@tool
+async def register_authority_npub(
+    candidate_npub: Annotated[
+        str,
+        Field(
+            description=(
+                "The Nostr npub of the candidate who wants to become "
+                "the curator of this Authority. Must start with 'npub1'."
+            ),
+        ),
+    ],
+) -> dict[str, Any]:
+    """Step 1/3 of Authority onboarding — send a Nostr DM challenge to the candidate.
+
+    Begins the Authority curator onboarding protocol. Sends a Nostr DM
+    to the candidate's npub containing a poison slug for anti-replay
+    protection. The candidate must reply in their Nostr client with
+    ``claim = @@@yes@@@`` and include the poison slug.
+
+    After the candidate replies, call ``confirm_authority_claim(candidate_npub)``
+    to verify the DM and escalate to the Prime Authority for approval.
+
+    The full protocol:
+    1. ``register_authority_npub(npub)`` — this tool (sends DM challenge)
+    2. ``confirm_authority_claim(npub)`` — verifies candidate reply, sends to Prime
+    3. ``check_authority_approval(npub)`` — checks Prime approval, activates Authority
+
+    Only one onboarding may be in progress at a time.
+    """
+    if not candidate_npub.startswith("npub1") or len(candidate_npub) < 60:
+        return {
+            "success": False,
+            "error": "Invalid npub format. Must start with 'npub1' and be at least 60 characters.",
+        }
+
+    # Reject if Authority already has a curator
+    existing = await _get_authority_npub()
+    if existing:
+        return {
+            "success": False,
+            "error": (
+                f"This Authority already has a curator ({existing[:16]}...). "
+                "Only one curator per Authority instance."
+            ),
+        }
+
+    # Start onboarding state
+    try:
+        challenge = _onboarding.start_claim(candidate_npub)
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
+
+    # Send DM challenge
+    try:
+        exchange = _get_nostr_exchange()
+        result = await exchange.open_channel(
+            "authority_claim",
+            greeting=(
+                "You are requesting to become the curator of this Authority. "
+                "Reply with: claim = @@@yes@@@ and include the poison slug."
+            ),
+            recipient_npub=candidate_npub,
+        )
+    except Exception as exc:
+        _onboarding.complete()  # rollback state
+        return {"success": False, "error": f"Failed to send DM challenge: {exc}"}
+
+    return {
+        "success": True,
+        "candidate_npub": candidate_npub,
+        "phase": challenge.phase,
+        "instructions": (
+            f"A Nostr DM challenge has been sent to {candidate_npub[:16]}... "
+            "The candidate must reply in their Nostr client with:\n\n"
+            "  claim = @@@yes@@@\n\n"
+            "Include the poison slug shown in the DM. "
+            "Then call confirm_authority_claim(candidate_npub) to proceed."
+        ),
+        "message": result.get("message", "DM sent."),
+    }
+
+
+@tool
+async def confirm_authority_claim(
+    candidate_npub: Annotated[
+        str,
+        Field(
+            description=(
+                "The Nostr npub of the candidate who replied to the "
+                "DM challenge from register_authority_npub."
+            ),
+        ),
+    ],
+) -> dict[str, Any]:
+    """Step 2/3 of Authority onboarding — verify candidate DM, escalate to Prime.
+
+    Polls Nostr relays for the candidate's DM reply to the challenge
+    sent by ``register_authority_npub``. The reply must include
+    ``claim = @@@yes@@@`` and the correct poison slug (Schnorr-signed
+    by the candidate's key, providing anti-replay).
+
+    On success, sends an approval request DM to the Prime Authority
+    asking them to approve this candidate. The Prime must reply with
+    ``approval = @@@yes@@@``.
+
+    Then call ``check_authority_approval(candidate_npub)`` to check
+    the Prime's response.
+    """
+    challenge = _onboarding.get()
+    if challenge is None:
+        return {
+            "success": False,
+            "error": "No active onboarding. Call register_authority_npub first.",
+        }
+    if challenge.candidate_npub != candidate_npub:
+        return {
+            "success": False,
+            "error": (
+                f"Active onboarding is for {challenge.candidate_npub[:16]}..., "
+                f"not {candidate_npub[:16]}..."
+            ),
+        }
+    if challenge.phase != "claim":
+        return {
+            "success": False,
+            "error": f"Onboarding is in '{challenge.phase}' phase, not 'claim'.",
+        }
+
+    # Poll for candidate's DM reply
+    try:
+        exchange = _get_nostr_exchange()
+        claim_result = await exchange.receive(
+            sender_npub=candidate_npub,
+            service="authority_claim",
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "error": f"No valid claim DM received: {exc}",
+        }
+
+    # Candidate proved ownership. Now escalate to Prime Authority.
+    try:
+        prime_npub = await _resolve_prime_npub()
+    except Exception as exc:
+        return {
+            "success": False,
+            "error": f"Failed to resolve Prime Authority: {exc}",
+        }
+
+    # Promote onboarding state
+    try:
+        _onboarding.promote_to_approval(prime_npub)
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
+
+    # Send approval request to Prime
+    try:
+        signer = _get_nostr_signer()
+        exchange2 = _get_nostr_exchange()
+        await exchange2.open_channel(
+            "authority_approval",
+            greeting=(
+                f"{candidate_npub} requests to curate the Authority at "
+                f"npub {signer.npub[:16]}... "
+                "Reply with: approval = @@@yes@@@ and include the poison slug."
+            ),
+            recipient_npub=prime_npub,
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "error": f"Candidate verified, but failed to send approval request to Prime: {exc}",
+        }
+
+    return {
+        "success": True,
+        "candidate_npub": candidate_npub,
+        "phase": "approval",
+        "prime_npub": prime_npub,
+        "message": (
+            f"Candidate {candidate_npub[:16]}... verified. "
+            f"Approval request sent to Prime Authority ({prime_npub[:16]}...). "
+            "Call check_authority_approval(candidate_npub) after Prime responds."
+        ),
+    }
+
+
+@tool
+async def check_authority_approval(
+    candidate_npub: Annotated[
+        str,
+        Field(
+            description=(
+                "The Nostr npub of the candidate awaiting Prime Authority approval."
+            ),
+        ),
+    ],
+) -> dict[str, Any]:
+    """Step 3/3 of Authority onboarding — check Prime approval, activate Authority.
+
+    Polls Nostr relays for the Prime Authority's DM reply approving the
+    candidate. On success:
+
+    1. Persists the candidate's npub as this Authority's curator
+    2. Registers the Authority in the DPYC community registry via the Oracle
+    3. Activates immediately — no restart needed
+
+    The Authority is now discoverable by Operators in the DPYC registry.
+    """
+    challenge = _onboarding.get()
+    if challenge is None:
+        return {
+            "success": False,
+            "error": "No active onboarding. Start with register_authority_npub.",
+        }
+    if challenge.candidate_npub != candidate_npub:
+        return {
+            "success": False,
+            "error": (
+                f"Active onboarding is for {challenge.candidate_npub[:16]}..., "
+                f"not {candidate_npub[:16]}..."
+            ),
+        }
+    if challenge.phase != "approval":
+        return {
+            "success": False,
+            "error": f"Onboarding is in '{challenge.phase}' phase, not 'approval'.",
+        }
+
+    prime_npub = challenge.prime_npub
+    if not prime_npub:
+        return {
+            "success": False,
+            "error": "Prime Authority npub not set. This should not happen.",
+        }
+
+    # Poll for Prime's approval DM
+    try:
+        exchange = _get_nostr_exchange()
+        await exchange.receive(
+            sender_npub=prime_npub,
+            service="authority_approval",
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "error": f"No approval received from Prime: {exc}",
+        }
+
+    # Persist curator npub
+    await _set_authority_npub(candidate_npub)
+
+    # Register via Oracle MCP-to-MCP
+    commit_url = ""
+    try:
+        signer = _get_nostr_signer()
+        service_url = await _resolve_own_service_url()
+        commit_url = await _register_via_oracle(
+            authority_npub=candidate_npub,
+            display_name=f"Authority ({candidate_npub[:16]}...)",
+            service_url=service_url,
+            upstream_authority_npub=prime_npub,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Oracle registration failed (Authority is still activated locally): %s",
+            exc,
+        )
+
+    # Complete onboarding
+    _onboarding.complete()
+
+    result: dict[str, Any] = {
+        "success": True,
+        "candidate_npub": candidate_npub,
+        "activated": True,
+        "message": (
+            f"Authority curator set to {candidate_npub[:16]}... "
+            "and activated immediately."
+        ),
+    }
+    if commit_url:
+        result["commit_url"] = commit_url
+        result["message"] += f" Registered in DPYC community: {commit_url}"
+
+    return result
 
 
 # ---------------------------------------------------------------------------
