@@ -68,7 +68,7 @@ _CATALOG: list[ToolPathInfo] = [
         path=ToolPath.HOT,
         requires_auth=True,
         cost_tier="FREE",
-        agent_hint="Admin-only: record an upstream credit purchase.",
+        agent_hint="Deprecated — upstream certification is now automatic via certify_credits.",
     ),
     # ── Cold-path (BTCPay) ───────────────────────────────────────
     ToolPathInfo(

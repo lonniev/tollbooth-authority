@@ -567,9 +567,6 @@ def _register_shutdown_handlers() -> None:
 # Constants
 # ---------------------------------------------------------------------------
 
-SUPPLY_USER_ID = "__upstream_supply__"
-"""Reserved ledger user_id for tracking upstream cert-sats supply."""
-
 # ---------------------------------------------------------------------------
 # MCP Tools
 # ---------------------------------------------------------------------------
@@ -848,10 +845,7 @@ async def operator_status() -> dict[str, Any]:
     if s.upstream_authority_address:
         result["upstream_authority_address"] = s.upstream_authority_address
         result["upstream_tax_percent"] = s.upstream_tax_percent
-        # Surface supply ledger
-        supply = await cache.get(SUPPLY_USER_ID)
-        result["upstream_supply_sats"] = supply.balance_api_sats
-        result["upstream_supply_consumed_sats"] = supply.total_consumed_api_sats
+        result["upstream_supply_mode"] = "auto"
 
     if s.dpyc_enforce_membership:
         result["dpyc_registry_enforcement"] = True
@@ -961,32 +955,30 @@ async def certify_credits(
 
     cache.mark_dirty(operator_id)
 
-    # Non-Prime: debit cert-sats from upstream supply
-    supply = None  # hoisted for rollback access in registry check
-    if s.upstream_authority_address:
-        supply = await cache.get(SUPPLY_USER_ID)
-        if not supply.debit("certify_supply", amount_sats):
-            # Rollback the fee debit
-            ledger.rollback_debit("certify_credits", fee_sats)
-            return {
-                "success": False,
-                "error": (
-                    f"Insufficient upstream supply. Need {amount_sats} cert-sats, "
-                    f"have {supply.balance_api_sats}. Admin must purchase from upstream."
-                ),
-            }
-        cache.mark_dirty(SUPPLY_USER_ID)
-
-    # DPYC registry membership check (fail closed)
+    # DPYC registry membership check (fail closed) — before upstream certify
+    # to avoid wasting upstream cert-sats if the registry check fails.
     registry = _get_dpyc_registry()
     if registry is not None:
         try:
             await registry.check_membership(operator_id)
         except RegistryError as e:
             ledger.rollback_debit("certify_credits", fee_sats)
-            if supply is not None:
-                supply.rollback_debit("certify_supply", amount_sats)
             return {"success": False, "error": f"DPYC membership check failed: {e}"}
+
+    # Non-Prime: certify upstream in real-time
+    upstream_cert = None
+    if s.upstream_authority_address:
+        from tollbooth.authority_client import AuthorityCertifier, AuthorityCertifyError
+
+        authority_npub = await _get_authority_npub()
+        if not authority_npub:
+            authority_npub = nostr_signer.npub
+        certifier = AuthorityCertifier(s.upstream_authority_address, authority_npub)
+        try:
+            upstream_cert = await certifier.certify(amount_sats)
+        except AuthorityCertifyError as e:
+            ledger.rollback_debit("certify_credits", fee_sats)
+            return {"success": False, "error": f"Upstream certification failed: {e}"}
 
     # Build claims and sign Nostr event certificate
     jti = uuid.uuid4().hex
@@ -1014,7 +1006,7 @@ async def certify_credits(
     if not await cache.flush_user(operator_id):
         logger.error("Failed to persist fee debit for %s", operator_id)
 
-    return {
+    result = {
         "success": True,
         "certificate": nostr_event_json,
         "jti": jti,
@@ -1024,6 +1016,12 @@ async def certify_credits(
         "expires_at": expiration,
     }
 
+    if upstream_cert is not None:
+        result["upstream_certificate"] = upstream_cert.get("certificate")
+        result["upstream_jti"] = upstream_cert.get("jti")
+
+    return result
+
 
 @tool
 async def report_upstream_purchase(
@@ -1032,65 +1030,25 @@ async def report_upstream_purchase(
         Field(
             description=(
                 "Number of cert-sats purchased from the upstream Authority. "
-                "Must be positive. Call this after completing an upstream purchase "
-                "to replenish the local supply ledger."
+                "Deprecated — upstream certification is now automatic."
             ),
         ),
     ],
 ) -> dict[str, Any]:
-    """Report a completed upstream cert-sats purchase to replenish local supply.
+    """Deprecated — upstream certification is now automatic.
 
-    Admin tool. After the Authority admin manually purchases cert-sats from
-    the upstream Authority (via purchase_credits + check_payment on
-    the upstream), call this to credit the local supply ledger so that
-    certify_credits can proceed.
-
-    Returns:
-        success: True if the supply was credited.
-        supply_balance_sats: Updated supply balance after crediting.
-        credited_sats: The amount credited.
-
-    Errors: Fails if amount_sats is not positive.
+    Since v0.4.0, certify_credits automatically obtains upstream certificates
+    via AuthorityCertifier when upstream_authority_address is configured.
+    Manual supply management is no longer needed.
     """
-    if amount_sats <= 0:
-        return {"success": False, "error": "amount_sats must be positive."}
-
-    # Authorization: only the Authority Operator may report upstream purchases.
-    # Check vault-persisted npub first, fall back to signer npub.
-    authority_npub = await _get_authority_npub()
-    if not authority_npub:
-        try:
-            signer = _get_nostr_signer()
-            authority_npub = signer.npub
-        except ValueError:
-            return {
-                "success": False,
-                "error": "Authority identity not configured. "
-                "Complete Authority onboarding or set DPYC_AUTHORITY_NPUB.",
-            }
-    try:
-        caller_npub = _get_effective_user_id()
-    except ValueError as e:
-        return {"success": False, "error": str(e)}
-    if caller_npub != authority_npub:
-        return {
-            "success": False,
-            "error": "Unauthorized. Only the Authority admin may report upstream purchases.",
-        }
-
-    cache = _get_ledger_cache()
-    supply = await cache.get(SUPPLY_USER_ID)
-    supply.credit_deposit(
-        amount_sats,
-        invoice_id=f"upstream_{datetime.now(timezone.utc).isoformat()}",
-    )
-    cache.mark_dirty(SUPPLY_USER_ID)
-    await cache.flush_user(SUPPLY_USER_ID)
-
     return {
-        "success": True,
-        "supply_balance_sats": supply.balance_api_sats,
-        "credited_sats": amount_sats,
+        "success": False,
+        "error": (
+            "report_upstream_purchase is deprecated. Since v0.4.0, "
+            "certify_credits automatically certifies upstream when "
+            "upstream_authority_address is configured. No manual supply "
+            "management is needed."
+        ),
     }
 
 
