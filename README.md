@@ -53,9 +53,11 @@ Certificates are Schnorr-signed Nostr events (NIP-33 parameterized replaceable e
 
 The Authority checks the [dpyc-community `members.json`](https://github.com/lonniev/dpyc-community/blob/main/members.json) registry at certification time. Operators must have `"status": "active"` in the registry. The registry is HTTP-cached with a configurable TTL. Design is fail-closed: if the registry is unreachable, certification is denied.
 
-### Supply Ledger
+### Automatic Upstream Certification
 
-The Authority maintains its own internal cert-sat supply balance, separate from operator ledger balances. A `FiniteSupplyConstraint` ensures the Authority cannot certify more than its available supply. Use `report_upstream_purchase` (admin-gated) to replenish the supply after purchasing from an upstream Authority. The Prime Authority (root of the chain) self-mints its initial supply.
+Since v0.4.0, non-Prime Authorities automatically certify upstream in real-time. When `certify_credits` is called and `upstream_authority_address` is configured, the Authority uses `AuthorityCertifier` (from tollbooth-dpyc) to obtain a signed certificate from its upstream Authority before issuing its own. This mirrors how Operators already auto-certify via the same `AuthorityCertifier` class — the self-similar pattern extends all the way up the chain.
+
+No manual supply management is needed. The old `report_upstream_purchase` tool is deprecated. The Prime Authority (root of the chain, `upstream_authority_address` empty) self-signs and skips the upstream call.
 
 ### Anti-Replay (ReplayTracker)
 
@@ -99,7 +101,7 @@ To run your own Authority instance, set these environment variables:
 | `THEBRAIN_VAULT_BRAIN_ID` | Brain ID used as the operator credential vault | `uuid-of-vault-brain` |
 | `THEBRAIN_VAULT_HOME_ID` | Home thought ID in the vault brain | `uuid-of-home-thought` |
 | `TOLLBOOTH_NOSTR_OPERATOR_NSEC` | Nostr secret key (nsec) for Schnorr certificate signing | `nsec1...` |
-| `DPYC_AUTHORITY_NPUB` | Admin identity — gates `report_upstream_purchase` | `npub1...` |
+| `DPYC_AUTHORITY_NPUB` | Authority's Nostr npub identity for upstream certification | `npub1...` |
 | `DPYC_COMMUNITY_REGISTRY_URL` | URL to `members.json` for membership enforcement | `https://raw.githubusercontent.com/...` |
 | `DPYC_ENFORCE_MEMBERSHIP` | Enable registry enforcement at certification time | `true` |
 | `NEON_DATABASE_URL` | Neon Postgres URL for persistent operator ledgers (preferred) | `postgresql://...` |
@@ -141,7 +143,7 @@ All 11 protocol methods are fully implemented:
 | `check_balance` | Check your current credit balance, total deposited, total consumed, and pending invoices. |
 | `operator_status` | View your registration status, balance summary, and the Authority's Nostr npub. |
 | `certify_credits` | The core machine-to-machine tool. Deducts fee and returns a Schnorr-signed Nostr event certificate (kind 30079). |
-| `report_upstream_purchase` | Admin tool (gated by `DPYC_AUTHORITY_NPUB`). Replenishes the local cert-sat supply after a manual upstream purchase. |
+| `report_upstream_purchase` | **Deprecated since v0.4.0.** Upstream certification is now automatic via `certify_credits`. |
 | `service_status` | Free diagnostic. Returns software versions for tollbooth-authority, tollbooth-dpyc, fastmcp, and Python. |
 | `check_dpyc_membership` | Free diagnostic. Looks up an npub in the DPYC community registry. |
 
@@ -156,6 +158,7 @@ The following tool names from v0.1.x are deprecated. They remain registered as s
 | `tax_balance` | `check_balance` | Returns error with migration guidance |
 | `certify_purchase` | `certify_credits` | Pass-through (delegates to `certify_credits`) |
 | `activate_dpyc` | `register_operator` | Returns error directing callers to use `register_operator(npub=...)` |
+| `report_upstream_purchase` | *(automatic)* | Returns deprecation notice — upstream certification is now automatic in `certify_credits` (v0.4.0) |
 | `check_tax_payment` | `check_payment` | Returns error with migration guidance |
 
 ## Development
