@@ -194,39 +194,39 @@ class TestSelfSimilarCommerceChain:
         assert claims["net_sats"] == result["net_sats"]
 
     @pytest.mark.asyncio
-    async def test_non_prime_upstream_supply_debit_and_rollback(self):
-        """Non-Prime path: upstream supply is debited; rolled back on insufficient supply."""
+    async def test_non_prime_upstream_auto_certify(self):
+        """Non-Prime path: upstream AuthorityCertifier is called; failure rolls back."""
         import tollbooth_authority.server as srv
+        from tollbooth.authority_client import AuthorityCertifyError
 
         nostr_signer = _make_nostr_signer()
         settings = _make_settings()
-        # Make it non-Prime by setting upstream address
         settings.upstream_authority_address = "https://upstream.example.com"
 
         operator_ledger = _ledger_with_balance(5000)
-        supply_ledger = _ledger_with_balance(100)  # too low for 1000 sat cert
-
-        async def mock_get(user_id: str) -> UserLedger:
-            if user_id == srv.SUPPLY_USER_ID:
-                return supply_ledger
-            return operator_ledger
 
         cache = MagicMock(spec=LedgerCache)
-        cache.get = AsyncMock(side_effect=mock_get)
+        cache.get = AsyncMock(return_value=operator_ledger)
         cache.mark_dirty = MagicMock()
         cache.flush_user = AsyncMock(return_value=True)
         replay = ReplayTracker(ttl_seconds=600)
 
+        # Test failure path: upstream refuses → fee rolled back
         with (
             patch.object(srv, "_get_settings", return_value=settings),
             patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
             patch.object(srv, "_get_ledger_cache", return_value=cache),
             patch.object(srv, "_get_replay_tracker", return_value=replay),
+            patch.object(srv, "_get_authority_npub", new_callable=AsyncMock, return_value=nostr_signer.npub),
+            patch("tollbooth.authority_client.AuthorityCertifier") as MockCertifierClass,
         ):
+            MockCertifierClass.return_value.certify = AsyncMock(
+                side_effect=AuthorityCertifyError("insufficient balance")
+            )
             result = await srv.certify_credits("op-1", 1000)
 
         assert result["success"] is False
-        assert "Insufficient upstream supply" in result["error"]
+        assert "Upstream certification failed" in result["error"]
         # Operator's fee debit should have been rolled back
         assert operator_ledger.balance_api_sats == 5000
 

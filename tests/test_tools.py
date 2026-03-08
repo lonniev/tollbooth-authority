@@ -306,75 +306,77 @@ async def test_operator_status_shows_upstream():
 
     assert result["upstream_authority_address"] == "upstream@btcpay.example.com"
     assert result["upstream_tax_percent"] == 3.0
+    assert result["upstream_supply_mode"] == "auto"
 
 
 # ---------------------------------------------------------------------------
-# Upstream supply constraint
+# Upstream auto-certification
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_certify_credits_deducts_supply():
-    """Non-Prime Authority: certify_credits debits amount_sats from supply ledger."""
+async def test_certify_credits_calls_upstream_certifier():
+    """Non-Prime Authority: certify_credits calls AuthorityCertifier.certify()."""
     import tollbooth_authority.server as srv
 
     nostr_signer = _make_nostr_signer()
     settings = _make_settings(
         tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600,
-        upstream_authority_address="upstream@example.com",
+        upstream_authority_address="https://upstream.example.com",
     )
 
     operator_ledger = _ledger_with_balance(1000)
-    supply_ledger = _ledger_with_balance(5000)
-
-    async def fake_get(user_id: str) -> UserLedger:
-        if user_id == srv.SUPPLY_USER_ID:
-            return supply_ledger
-        return operator_ledger
 
     cache = MagicMock(spec=LedgerCache)
-    cache.get = AsyncMock(side_effect=fake_get)
+    cache.get = AsyncMock(return_value=operator_ledger)
     cache.mark_dirty = MagicMock()
     cache.flush_user = AsyncMock(return_value=True)
 
     replay = ReplayTracker(ttl_seconds=600)
+
+    mock_upstream_result = {
+        "success": True,
+        "certificate": '{"kind":30079}',
+        "jti": "upstream-jti-123",
+        "amount_sats": 1000,
+        "fee_sats": 20,
+        "net_sats": 980,
+    }
+    mock_certifier = AsyncMock(return_value=mock_upstream_result)
 
     with (
         patch.object(srv, "_get_settings", return_value=settings),
         patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
         patch.object(srv, "_get_ledger_cache", return_value=cache),
         patch.object(srv, "_get_replay_tracker", return_value=replay),
+        patch.object(srv, "_get_authority_npub", new_callable=AsyncMock, return_value=nostr_signer.npub),
+        patch("tollbooth.authority_client.AuthorityCertifier") as MockCertifierClass,
     ):
+        MockCertifierClass.return_value.certify = mock_certifier
         result = await srv.certify_credits("op-1", 1000)
 
     assert result["success"] is True
-    # Supply should be debited by amount_sats (1000), not fee_sats
-    assert supply_ledger.balance_api_sats == 4000
-    # Verify supply was marked dirty
-    cache.mark_dirty.assert_any_call(srv.SUPPLY_USER_ID)
+    mock_certifier.assert_called_once_with(1000)
+    assert result["upstream_certificate"] == '{"kind":30079}'
+    assert result["upstream_jti"] == "upstream-jti-123"
 
 
 @pytest.mark.asyncio
-async def test_certify_credits_insufficient_supply():
-    """Non-Prime Authority: fails and rolls back fee when supply is too low."""
+async def test_certify_credits_upstream_failure_rollback():
+    """Non-Prime Authority: upstream failure rolls back operator fee debit."""
     import tollbooth_authority.server as srv
+    from tollbooth.authority_client import AuthorityCertifyError
 
     nostr_signer = _make_nostr_signer()
     settings = _make_settings(
         tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600,
-        upstream_authority_address="upstream@example.com",
+        upstream_authority_address="https://upstream.example.com",
     )
 
     operator_ledger = _ledger_with_balance(1000)
-    supply_ledger = _ledger_with_balance(500)  # Not enough for 1000
-
-    async def fake_get(user_id: str) -> UserLedger:
-        if user_id == srv.SUPPLY_USER_ID:
-            return supply_ledger
-        return operator_ledger
 
     cache = MagicMock(spec=LedgerCache)
-    cache.get = AsyncMock(side_effect=fake_get)
+    cache.get = AsyncMock(return_value=operator_ledger)
     cache.mark_dirty = MagicMock()
     cache.flush_user = AsyncMock(return_value=True)
 
@@ -385,20 +387,23 @@ async def test_certify_credits_insufficient_supply():
         patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
         patch.object(srv, "_get_ledger_cache", return_value=cache),
         patch.object(srv, "_get_replay_tracker", return_value=replay),
+        patch.object(srv, "_get_authority_npub", new_callable=AsyncMock, return_value=nostr_signer.npub),
+        patch("tollbooth.authority_client.AuthorityCertifier") as MockCertifierClass,
     ):
+        MockCertifierClass.return_value.certify = AsyncMock(
+            side_effect=AuthorityCertifyError("connection refused")
+        )
         result = await srv.certify_credits("op-1", 1000)
 
     assert result["success"] is False
-    assert "Insufficient upstream supply" in result["error"]
-    # Operator balance should be rolled back (fee_sats=20 was debited then restored)
+    assert "Upstream certification failed" in result["error"]
+    # Operator balance should be rolled back
     assert operator_ledger.balance_api_sats == 1000
-    # Supply should be unchanged
-    assert supply_ledger.balance_api_sats == 500
 
 
 @pytest.mark.asyncio
-async def test_certify_credits_prime_skips_supply():
-    """Prime Authority (no upstream): no supply check at all."""
+async def test_certify_credits_prime_skips_upstream():
+    """Prime Authority (no upstream): AuthorityCertifier never instantiated."""
     import tollbooth_authority.server as srv
 
     nostr_signer = _make_nostr_signer()
@@ -421,59 +426,31 @@ async def test_certify_credits_prime_skips_supply():
         patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
         patch.object(srv, "_get_ledger_cache", return_value=cache),
         patch.object(srv, "_get_replay_tracker", return_value=replay),
+        patch("tollbooth.authority_client.AuthorityCertifier") as MockCertifierClass,
     ):
         result = await srv.certify_credits("op-1", 1000)
 
     assert result["success"] is True
-    # cache.get should only be called once (for operator), not for supply
-    cache.get.assert_called_once_with("op-1")
+    # AuthorityCertifier should never be instantiated for Prime
+    MockCertifierClass.assert_not_called()
+    # No upstream fields in response
+    assert "upstream_certificate" not in result
+    assert "upstream_jti" not in result
 
 
 @pytest.mark.asyncio
-async def test_report_upstream_purchase_credits_supply():
-    """report_upstream_purchase credits the supply ledger and returns new balance."""
+async def test_report_upstream_purchase_deprecated():
+    """report_upstream_purchase returns deprecation error."""
     import tollbooth_authority.server as srv
 
-    supply_ledger = _ledger_with_balance(500)
-    nostr_signer = _make_nostr_signer()
-
-    cache = MagicMock(spec=LedgerCache)
-    cache.get = AsyncMock(return_value=supply_ledger)
-    cache.mark_dirty = MagicMock()
-    cache.flush_user = AsyncMock(return_value=True)
-
-    srv._dpyc_sessions["admin-1"] = nostr_signer.npub
-
-    with (
-        patch.object(srv, "_require_user_id", return_value="admin-1"),
-        patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
-        patch.object(srv, "_get_ledger_cache", return_value=cache),
-    ):
-        result = await srv.report_upstream_purchase(1000)
-
-    assert result["success"] is True
-    assert result["supply_balance_sats"] == 1500
-    assert result["credited_sats"] == 1000
-    cache.mark_dirty.assert_called_once_with(srv.SUPPLY_USER_ID)
-    cache.flush_user.assert_called_once_with(srv.SUPPLY_USER_ID)
+    result = await srv.report_upstream_purchase(1000)
+    assert result["success"] is False
+    assert "deprecated" in result["error"]
 
 
 @pytest.mark.asyncio
-async def test_report_upstream_purchase_negative_rejected():
-    """report_upstream_purchase rejects non-positive amounts."""
-    import tollbooth_authority.server as srv
-
-    result = await srv.report_upstream_purchase(-100)
-    assert result["success"] is False
-    assert "positive" in result["error"]
-
-    result = await srv.report_upstream_purchase(0)
-    assert result["success"] is False
-
-
-@pytest.mark.asyncio
-async def test_operator_status_shows_supply():
-    """Non-Prime Authority: operator_status includes upstream supply fields."""
+async def test_operator_status_shows_upstream_auto_mode():
+    """Non-Prime Authority: operator_status shows upstream_supply_mode=auto."""
     import tollbooth_authority.server as srv
 
     nostr_signer = _make_nostr_signer()
@@ -484,18 +461,9 @@ async def test_operator_status_shows_supply():
 
     operator_ledger = UserLedger()
     operator_ledger.credit_deposit(1000, "test-seed")
-    operator_ledger.debit("spend", 500)
-    supply_ledger = UserLedger()
-    supply_ledger.credit_deposit(5000, "test-seed")
-    supply_ledger.debit("spend", 2000)
-
-    async def fake_get(user_id: str) -> UserLedger:
-        if user_id == srv.SUPPLY_USER_ID:
-            return supply_ledger
-        return operator_ledger
 
     cache = MagicMock(spec=LedgerCache)
-    cache.get = AsyncMock(side_effect=fake_get)
+    cache.get = AsyncMock(return_value=operator_ledger)
     cache.health = MagicMock(return_value={"status": "ok"})
 
     srv._dpyc_sessions["op-1"] = SAMPLE_NPUB
@@ -508,8 +476,10 @@ async def test_operator_status_shows_supply():
     ):
         result = await srv.operator_status()
 
-    assert result["upstream_supply_sats"] == 3000
-    assert result["upstream_supply_consumed_sats"] == 2000
+    assert result["upstream_supply_mode"] == "auto"
+    # Old supply fields should not be present
+    assert "upstream_supply_sats" not in result
+    assert "upstream_supply_consumed_sats" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -933,103 +903,19 @@ async def test_service_status():
 
 
 # ---------------------------------------------------------------------------
-# report_upstream_purchase — admin auth (H-2)
+# report_upstream_purchase — deprecated (was admin auth H-2)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_report_upstream_purchase_non_admin_rejected():
-    """report_upstream_purchase rejects non-admin callers."""
+async def test_report_upstream_purchase_always_deprecated():
+    """report_upstream_purchase always returns deprecation error regardless of caller."""
     import tollbooth_authority.server as srv
 
-    nostr_signer = _make_nostr_signer()
-    non_admin_npub = "npub1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqs3mlyh"
-
-    srv._dpyc_sessions["caller-1"] = non_admin_npub
-
-    with (
-        patch.object(srv, "_require_user_id", return_value="caller-1"),
-        patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
-    ):
-        result = await srv.report_upstream_purchase(1000)
-
+    # Any call returns deprecation — no auth checks needed anymore
+    result = await srv.report_upstream_purchase(1000)
     assert result["success"] is False
-    assert "Unauthorized" in result["error"]
-
-
-@pytest.mark.asyncio
-async def test_report_upstream_purchase_no_admin_configured():
-    """report_upstream_purchase fails when TOLLBOOTH_NOSTR_OPERATOR_NSEC is not set."""
-    import tollbooth_authority.server as srv
-
-    with patch.object(
-        srv, "_get_nostr_signer", side_effect=ValueError("nsec not configured")
-    ):
-        result = await srv.report_upstream_purchase(1000)
-
-    assert result["success"] is False
-    assert "not configured" in result["error"]
-
-
-@pytest.mark.asyncio
-async def test_report_upstream_purchase_no_dpyc_session():
-    """report_upstream_purchase fails when no DPYC session is active."""
-    import tollbooth_authority.server as srv
-
-    nostr_signer = _make_nostr_signer()
-
-    with (
-        patch.object(srv, "_require_user_id", return_value="caller-no-session"),
-        patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
-    ):
-        result = await srv.report_upstream_purchase(1000)
-
-    assert result["success"] is False
-    assert "No DPYC identity active" in result["error"]
-
-
-@pytest.mark.asyncio
-async def test_report_upstream_purchase_via_authority_npub(monkeypatch):
-    """report_upstream_purchase accepts caller matching DPYC_AUTHORITY_NPUB."""
-    import tollbooth_authority.server as srv
-
-    operator_npub = "npub1" + "b" * 58
-    monkeypatch.setenv("DPYC_AUTHORITY_NPUB", operator_npub)
-
-    supply_ledger = _ledger_with_balance(500)
-    cache = MagicMock(spec=LedgerCache)
-    cache.get = AsyncMock(return_value=supply_ledger)
-    cache.mark_dirty = MagicMock()
-    cache.flush_user = AsyncMock(return_value=True)
-
-    srv._dpyc_sessions["op-env"] = operator_npub
-
-    with (
-        patch.object(srv, "_require_user_id", return_value="op-env"),
-        patch.object(srv, "_get_ledger_cache", return_value=cache),
-    ):
-        result = await srv.report_upstream_purchase(200)
-
-    assert result["success"] is True
-    assert result["credited_sats"] == 200
-
-
-@pytest.mark.asyncio
-async def test_report_upstream_purchase_authority_npub_rejects_non_operator(monkeypatch):
-    """report_upstream_purchase rejects caller not matching DPYC_AUTHORITY_NPUB."""
-    import tollbooth_authority.server as srv
-
-    operator_npub = "npub1" + "b" * 58
-    other_npub = "npub1" + "c" * 58
-    monkeypatch.setenv("DPYC_AUTHORITY_NPUB", operator_npub)
-
-    srv._dpyc_sessions["caller-env"] = other_npub
-
-    with patch.object(srv, "_require_user_id", return_value="caller-env"):
-        result = await srv.report_upstream_purchase(200)
-
-    assert result["success"] is False
-    assert "Unauthorized" in result["error"]
+    assert "deprecated" in result["error"]
 
 
 # ---------------------------------------------------------------------------
