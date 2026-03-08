@@ -35,7 +35,7 @@ from tollbooth_authority.onboarding import (
     OnboardingState,
     ONBOARDING_TEMPLATES,
 )
-from tollbooth_authority.registry import DPYCRegistry, RegistryError
+from tollbooth_authority.registry import DEFAULT_REGISTRY_URL, DPYCRegistry, RegistryError
 from tollbooth_authority.replay import ReplayTracker
 from tollbooth_authority.nostr_signing import AuthorityNostrSigner
 from tollbooth.vaults import TheBrainVault
@@ -363,7 +363,7 @@ async def _resolve_prime_npub() -> str:
     """Find the Prime Authority's npub from the DPYC registry."""
     s = _get_settings()
     registry = DPYCRegistry(
-        url=s.dpyc_registry_url,
+        url=DEFAULT_REGISTRY_URL,
         cache_ttl_seconds=s.dpyc_registry_cache_ttl_seconds,
     )
     try:
@@ -381,7 +381,7 @@ async def _resolve_own_service_url() -> str:
     signer = _get_nostr_signer()
     s = _get_settings()
     registry = DPYCRegistry(
-        url=s.dpyc_registry_url,
+        url=DEFAULT_REGISTRY_URL,
         cache_ttl_seconds=s.dpyc_registry_cache_ttl_seconds,
     )
     try:
@@ -496,7 +496,7 @@ def _get_dpyc_registry() -> DPYCRegistry | None:
         return None
     if _dpyc_registry is None:
         _dpyc_registry = DPYCRegistry(
-            url=s.dpyc_registry_url,
+            url=DEFAULT_REGISTRY_URL,
             cache_ttl_seconds=s.dpyc_registry_cache_ttl_seconds,
         )
     return _dpyc_registry
@@ -1133,7 +1133,7 @@ async def check_dpyc_membership(npub: str) -> dict[str, Any]:
     """
     s = _get_settings()
     registry = DPYCRegistry(
-        url=s.dpyc_registry_url,
+        url=DEFAULT_REGISTRY_URL,
         cache_ttl_seconds=s.dpyc_registry_cache_ttl_seconds,
     )
     try:
