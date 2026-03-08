@@ -44,8 +44,7 @@ class AuthoritySettings(BaseSettings):
     tollbooth_nostr_operator_nsec: str = ""
     tollbooth_nostr_relays: str = ""
 
-    # DPYC Registry enforcement
-    dpyc_registry_url: str = "https://raw.githubusercontent.com/lonniev/dpyc-community/main/members.json"
+    # DPYC Registry enforcement (URL comes from tollbooth-dpyc DEFAULT_REGISTRY_URL)
     dpyc_registry_cache_ttl_seconds: int = 300
     dpyc_enforce_membership: bool = False  # opt-in; safe default
 
