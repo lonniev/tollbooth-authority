@@ -285,6 +285,7 @@ async def test_operator_status_shows_upstream():
     nostr_signer = _make_nostr_signer()
     settings = _make_settings(
         upstream_authority_address="upstream@btcpay.example.com",
+        tax_rate_percent=3.0,
         upstream_tax_percent=3.0,
     )
     ledger = UserLedger()
@@ -456,6 +457,7 @@ async def test_operator_status_shows_upstream_auto_mode():
     nostr_signer = _make_nostr_signer()
     settings = _make_settings(
         upstream_authority_address="upstream@example.com",
+        tax_rate_percent=3.0,
         upstream_tax_percent=3.0,
     )
 
@@ -1101,3 +1103,48 @@ async def test_check_authority_approval_no_response():
 
     assert result["success"] is False
     assert "No approval received" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# Fee floor validation (config.py model_validator)
+# ---------------------------------------------------------------------------
+
+
+def test_fee_floor_valid_non_prime():
+    """Non-Prime with own rate >= upstream rate is accepted."""
+    s = _make_settings(
+        upstream_authority_address="https://upstream.example.com",
+        tax_rate_percent=3.0,
+        upstream_tax_percent=2.0,
+    )
+    assert s.tax_rate_percent == 3.0
+
+
+def test_fee_floor_equal_rates():
+    """Non-Prime with own rate == upstream rate is accepted (break-even)."""
+    s = _make_settings(
+        upstream_authority_address="https://upstream.example.com",
+        tax_rate_percent=2.0,
+        upstream_tax_percent=2.0,
+    )
+    assert s.tax_rate_percent == 2.0
+
+
+def test_fee_floor_rejects_below_upstream():
+    """Non-Prime with own rate < upstream rate is rejected at config time."""
+    with pytest.raises(ValueError, match="must be >= upstream_tax_percent"):
+        _make_settings(
+            upstream_authority_address="https://upstream.example.com",
+            tax_rate_percent=1.0,
+            upstream_tax_percent=2.0,
+        )
+
+
+def test_fee_floor_prime_skips_validation():
+    """Prime Authority (no upstream) allows any rate without validation."""
+    s = _make_settings(
+        upstream_authority_address="",
+        tax_rate_percent=0.5,
+        upstream_tax_percent=2.0,
+    )
+    assert s.tax_rate_percent == 0.5

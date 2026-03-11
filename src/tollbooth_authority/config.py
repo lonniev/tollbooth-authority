@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from typing import Self
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
 from tollbooth import ToolPricing
@@ -49,6 +52,17 @@ class AuthoritySettings(BaseSettings):
     dpyc_enforce_membership: bool = False  # opt-in; safe default
 
     model_config = {"env_file": ".env", "extra": "ignore"}
+
+    @model_validator(mode="after")
+    def _validate_fee_floor(self) -> Self:
+        """Reject configs where the local fee can't cover upstream costs."""
+        if self.upstream_authority_address and self.tax_rate_percent < self.upstream_tax_percent:
+            raise ValueError(
+                f"tax_rate_percent ({self.tax_rate_percent}%) must be >= "
+                f"upstream_tax_percent ({self.upstream_tax_percent}%) or "
+                f"every certification loses money"
+            )
+        return self
 
     @property
     def certify_pricing(self) -> ToolPricing:
