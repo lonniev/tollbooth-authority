@@ -59,6 +59,8 @@ Since v0.4.0, non-Prime Authorities automatically certify upstream in real-time.
 
 No manual supply management is needed. The old `report_upstream_purchase` tool is deprecated. The Prime Authority (root of the chain, `upstream_authority_address` empty) self-signs and skips the upstream call.
 
+Since v0.4.3, a startup validator rejects any non-Prime configuration where `TAX_RATE_PERCENT < UPSTREAM_TAX_PERCENT` — a fee rate below the upstream rate would lose money on every certification.
+
 ### Anti-Replay (ReplayTracker)
 
 Every certificate includes a unique JTI (JWT ID). The Authority tracks seen JTIs in an in-memory ordered dict with TTL-based pruning. This prevents certificate replay attacks even if a certificate is intercepted before expiration.
