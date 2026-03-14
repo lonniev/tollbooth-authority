@@ -93,6 +93,21 @@ _CATALOG: list[ToolPathInfo] = [
         cost_tier="FREE",
         agent_hint="Check whether an npub is a registered DPYC member.",
     ),
+    # ── Pricing CRUD ────────────────────────────────────────────
+    ToolPathInfo(
+        tool_name="get_pricing_model",
+        path=ToolPath.HOT,
+        requires_auth=False,
+        cost_tier="FREE",
+        agent_hint="Get the active pricing model for this operator.",
+    ),
+    ToolPathInfo(
+        tool_name="set_pricing_model",
+        path=ToolPath.HOT,
+        requires_auth=False,
+        cost_tier="FREE",
+        agent_hint="Set or update the active pricing model.",
+    ),
     # ── Authority onboarding (Nostr DM challenge-response) ────
     ToolPathInfo(
         tool_name="register_authority_npub",
