@@ -204,6 +204,11 @@ def _get_nostr_signer() -> AuthorityNostrSigner:
     return _nostr_signer
 
 
+def _get_operator_npub() -> str:
+    """Return the Authority's own npub (derived from its nsec)."""
+    return _get_nostr_signer().npub
+
+
 def _get_btcpay() -> BTCPayClient:
     global _btcpay_client
     if _btcpay_client is not None:
@@ -309,6 +314,30 @@ def _get_config_vault() -> Any:
     from tollbooth.vaults import NeonVault
     _config_vault = NeonVault(database_url=s.neon_database_url)
     return _config_vault
+
+
+# ---------------------------------------------------------------------------
+# Pricing model store singleton
+# ---------------------------------------------------------------------------
+
+_pricing_store: Any = None
+
+
+def _get_pricing_store() -> Any:
+    global _pricing_store
+    if _pricing_store is not None:
+        return _pricing_store
+    vault = _get_config_vault()
+    if vault is None:
+        raise RuntimeError("Pricing model store requires NEON_DATABASE_URL")
+    from tollbooth.pricing_store import PricingModelStore
+
+    _pricing_store = PricingModelStore(neon_vault=vault)
+    try:
+        asyncio.ensure_future(_pricing_store.ensure_schema())
+    except RuntimeError:
+        pass
+    return _pricing_store
 
 
 async def _get_authority_npub() -> str | None:
@@ -1468,4 +1497,35 @@ async def account_statement_infographic() -> dict[str, Any]:
         "svg": svg,
         "data": data,
     }
+
+
+# ---------------------------------------------------------------------------
+# Pricing CRUD tools
+# ---------------------------------------------------------------------------
+
+
+@tool
+async def get_pricing_model() -> dict[str, Any]:
+    """Get the active pricing model for this Authority. Free."""
+    try:
+        store = _get_pricing_store()
+        operator = _get_operator_npub()
+    except (ValueError, RuntimeError) as e:
+        return {"status": "error", "error": str(e)}
+    from tollbooth.tools.pricing import get_pricing_model_tool
+
+    return await get_pricing_model_tool(store, operator)
+
+
+@tool
+async def set_pricing_model(model_json: str) -> dict[str, Any]:
+    """Set or update the active pricing model. Free — operator self-service."""
+    try:
+        store = _get_pricing_store()
+        operator = _get_operator_npub()
+    except (ValueError, RuntimeError) as e:
+        return {"status": "error", "error": str(e)}
+    from tollbooth.tools.pricing import set_pricing_model_tool
+
+    return await set_pricing_model_tool(store, operator, model_json)
 
