@@ -1525,7 +1525,32 @@ async def set_pricing_model(model_json: str) -> dict[str, Any]:
         operator = _get_operator_npub()
     except (ValueError, RuntimeError) as e:
         return {"status": "error", "error": str(e)}
+
+    # Verify caller is the operator (skip in STDIO mode)
+    user_id = _get_current_user_id()
+    if user_id is not None:
+        try:
+            caller_npub = _get_effective_user_id()
+        except ValueError as e:
+            return {"status": "error", "error": str(e)}
+        if caller_npub != operator:
+            return {"status": "error", "error": "Only the operator can modify pricing"}
+
     from tollbooth.tools.pricing import set_pricing_model_tool
 
     return await set_pricing_model_tool(store, operator, model_json)
+
+
+@tool
+async def list_constraint_types() -> dict[str, Any]:
+    """List all available constraint types and their parameter schemas.
+
+    Returns the type, category, description, and parameter specs for
+    every constraint that can be used in a pricing pipeline.
+
+    Free — no credits required.
+    """
+    from tollbooth.tools.pricing import list_constraint_types as _list
+
+    return {"status": "ok", "constraint_types": _list()}
 
