@@ -22,9 +22,9 @@ def test_slug():
 
 
 def test_tool_catalog_completeness():
-    """Catalog has exactly 14 entries matching Protocol method names."""
+    """Catalog has exactly 16 entries matching Protocol method names."""
     catalog = AuthorityActor.tool_catalog()
-    assert len(catalog) == 14
+    assert len(catalog) == 16
 
     # Every entry is a ToolPathInfo
     for entry in catalog:
@@ -43,6 +43,8 @@ def test_tool_catalog_completeness():
         "purchase_credits",
         "check_payment",
         "check_dpyc_membership",
+        "get_pricing_model",
+        "set_pricing_model",
         "register_authority_npub",
         "confirm_authority_claim",
         "check_authority_approval",
