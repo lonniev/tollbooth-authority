@@ -1519,7 +1519,27 @@ async def get_pricing_model() -> dict[str, Any]:
 
 @tool
 async def set_pricing_model(model_json: str) -> dict[str, Any]:
-    """Set or update the active pricing model. Free — operator self-service."""
+    """Set or update the active pricing model.
+
+    Free — operator self-service tool.
+
+    Args:
+        model_json: JSON string with pricing model data.
+            May include "operator_proof" — a signed Nostr kind-27235 event
+            JSON string proving operator identity when the caller's session
+            npub differs from the operator npub.
+    """
+    # Extract operator_proof from inside model_json if present
+    import json as _json
+    operator_proof = ""
+    try:
+        parsed = _json.loads(model_json)
+        if isinstance(parsed, dict) and "operator_proof" in parsed:
+            operator_proof = parsed.pop("operator_proof", "")
+            model_json = _json.dumps(parsed)
+    except (ValueError, TypeError):
+        pass
+
     try:
         store = _get_pricing_store()
         operator = _get_operator_npub()
@@ -1534,7 +1554,13 @@ async def set_pricing_model(model_json: str) -> dict[str, Any]:
         except ValueError as e:
             return {"status": "error", "error": str(e)}
         if caller_npub != operator:
-            return {"status": "error", "error": "Only the operator can modify pricing"}
+            # Allow if a valid operator proof was provided
+            if not operator_proof:
+                return {"status": "error", "error": "Only the operator can modify pricing"}
+            from tollbooth.operator_proof import verify_operator_proof
+
+            if not verify_operator_proof(operator_proof, operator, "set_pricing_model"):
+                return {"status": "error", "error": "Only the operator can modify pricing"}
 
     from tollbooth.tools.pricing import set_pricing_model_tool
 
