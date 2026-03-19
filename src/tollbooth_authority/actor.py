@@ -18,8 +18,8 @@ _CATALOG: list[ToolPathInfo] = [
         tool_name="certify_credits",
         path=ToolPath.HOT,
         requires_auth=True,
-        cost_tier="FREE",
-        agent_hint="Core product — certify a credit purchase for an operator.",
+        cost_tier="AD_VALOREM",
+        agent_hint="Core product — certify a credit purchase for an operator. Ad valorem 2% of amount_sats.",
     ),
     ToolPathInfo(
         tool_name="register_operator",
@@ -53,8 +53,8 @@ _CATALOG: list[ToolPathInfo] = [
         tool_name="account_statement_infographic",
         path=ToolPath.HOT,
         requires_auth=True,
-        cost_tier="FREE",
-        agent_hint="Return a visual summary of the operator's account.",
+        cost_tier="1_SAT",
+        agent_hint="Return a visual summary of the operator's account. Costs 1 sat.",
     ),
     ToolPathInfo(
         tool_name="service_status",
@@ -75,8 +75,8 @@ _CATALOG: list[ToolPathInfo] = [
         tool_name="purchase_credits",
         path=ToolPath.COLD,
         requires_auth=True,
-        cost_tier="FREE",
-        agent_hint="Create a Lightning invoice for credit purchase.",
+        cost_tier="AUTH",
+        agent_hint="Create a Lightning invoice for credit purchase. Auth tier — free.",
     ),
     ToolPathInfo(
         tool_name="check_payment",
@@ -93,20 +93,20 @@ _CATALOG: list[ToolPathInfo] = [
         cost_tier="FREE",
         agent_hint="Check whether an npub is a registered DPYC member.",
     ),
-    # ── Pricing CRUD ────────────────────────────────────────────
+    # ── Pricing CRUD (restricted, free) ───────────────────────────
     ToolPathInfo(
         tool_name="get_pricing_model",
         path=ToolPath.HOT,
         requires_auth=False,
-        cost_tier="FREE",
-        agent_hint="Get the active pricing model for this operator.",
+        cost_tier="RESTRICTED",
+        agent_hint="Get the active pricing model for this operator. Restricted but free.",
     ),
     ToolPathInfo(
         tool_name="set_pricing_model",
         path=ToolPath.HOT,
         requires_auth=False,
-        cost_tier="FREE",
-        agent_hint="Set or update the active pricing model.",
+        cost_tier="RESTRICTED",
+        agent_hint="Set or update the active pricing model. Restricted but free.",
     ),
     # ── Authority onboarding (Nostr DM challenge-response) ────
     ToolPathInfo(

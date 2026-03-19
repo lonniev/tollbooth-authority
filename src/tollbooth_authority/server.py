@@ -1506,7 +1506,12 @@ async def account_statement_infographic() -> dict[str, Any]:
 
 @tool
 async def get_pricing_model() -> dict[str, Any]:
-    """Get the active pricing model for this Authority. Free."""
+    """Get the active pricing model for this Authority. Free.
+
+    Returns the stored model if one exists, otherwise the built-in
+    default pricing (all free except certify_credits ad valorem 2%,
+    account_statement_infographic 1 sat).
+    """
     try:
         store = _get_pricing_store()
         operator = _get_operator_npub()
@@ -1514,7 +1519,20 @@ async def get_pricing_model() -> dict[str, Any]:
         return {"status": "error", "error": str(e)}
     from tollbooth.tools.pricing import get_pricing_model_tool
 
-    return await get_pricing_model_tool(store, operator)
+    result = await get_pricing_model_tool(store, operator)
+
+    # If no stored model, return the built-in default
+    if result.get("status") == "ok" and result.get("tools") is None:
+        from tollbooth_authority.default_pricing import build_default_model
+        from tollbooth.tools.pricing import _model_to_response
+
+        default = build_default_model()
+        default.operator = operator
+        resp = _model_to_response(default)
+        resp["source"] = "default"
+        return resp
+
+    return result
 
 
 @tool
