@@ -679,20 +679,37 @@ async def purchase_credits(
         int,
         Field(
             description=(
-                "Number of satoshis to pre-fund into your credit balance. "
+                "Number of satoshis to pre-fund into the operator credit balance. "
                 "This is the certification fee reserve, not the user-facing price. "
                 "At 2% fee rate, 1000 sats funds ~50,000 sats of certified purchases. "
                 "Minimum 1."
             ),
         ),
     ],
+    operator_id: Annotated[
+        str,
+        Field(
+            default="",
+            description=(
+                "Optional: the operator npub whose ledger should receive the credits. "
+                "Use this when the Horizon OAuth session identity differs from the "
+                "operator's DPYC npub (e.g. funding a service's NSEC-derived npub). "
+                "If empty, defaults to the session's registered npub."
+            ),
+        ),
+    ] = "",
 ) -> dict[str, Any]:
-    """Create a Lightning invoice to pre-fund your operator credit balance.
+    """Create a Lightning invoice to pre-fund an operator credit balance.
 
-    Call this whenever your credit balance is low or zero. Returns a Lightning
-    invoice with a checkoutLink — pay it with any Lightning wallet. After
-    payment, call check_payment with the returned invoice_id to credit
-    your balance.
+    Call this whenever the operator's credit balance is low or zero. Returns a
+    Lightning invoice with a checkoutLink — pay it with any Lightning wallet.
+    After payment, call check_payment with the returned invoice_id to credit
+    the balance.
+
+    The optional operator_id parameter lets you fund a specific operator's
+    ledger when your Horizon session identity differs from the target npub.
+    This is common: Horizon OAuth is access control, npubs are economic
+    identity, and the two are orthogonal.
 
     Do NOT call this if you already have a pending unpaid invoice — pay the
     existing one first, or let it expire.
@@ -702,27 +719,33 @@ async def purchase_credits(
         invoice_id: The BTCPay invoice ID (pass to check_payment).
         checkout_link: URL to pay the Lightning invoice.
         amount_sats: The amount requested.
+        funded_operator: The npub whose ledger will be credited.
 
-    Next step: Pay the invoice, then call check_payment(invoice_id).
+    Next step: Pay the invoice, then call check_payment(invoice_id, operator_id).
 
     Errors: Fails if not registered (call register_operator first) or if
     BTCPay is unreachable.
     """
     try:
-        user_id = _get_effective_user_id()
+        session_npub = _get_effective_user_id()
     except ValueError as e:
         return {"success": False, "error": str(e)}
+
+    target_npub = operator_id.strip() if operator_id.strip() else session_npub
 
     btcpay = _get_btcpay()
     cache = _get_ledger_cache()
     s = _get_settings()
 
-    return await direct_purchase_tool(
-        btcpay, cache, user_id, amount_sats,
+    result = await direct_purchase_tool(
+        btcpay, cache, target_npub, amount_sats,
         tier_config_json=s.btcpay_tier_config,
         user_tiers_json=s.btcpay_user_tiers,
         default_credit_ttl_seconds=None,  # Authority balances never expire
     )
+    if result.get("success"):
+        result["funded_operator"] = target_npub
+    return result
 
 
 @tool
@@ -737,12 +760,27 @@ async def check_payment(
             ),
         ),
     ],
+    operator_id: Annotated[
+        str,
+        Field(
+            default="",
+            description=(
+                "Optional: the operator npub whose ledger should be credited. "
+                "Must match the operator_id used in the purchase_credits call "
+                "that created this invoice. If empty, defaults to the session's "
+                "registered npub."
+            ),
+        ),
+    ] = "",
 ) -> dict[str, Any]:
-    """Verify that a Lightning invoice has settled and credit the payment to your balance.
+    """Verify that a Lightning invoice has settled and credit the operator's balance.
 
     Call this after paying the invoice from purchase_credits. Safe to call
     multiple times — credits are only granted once per invoice. If the invoice
     hasn't settled yet, returns the current status without crediting.
+
+    If you passed operator_id to purchase_credits, pass the same operator_id
+    here so the credits land in the correct ledger.
 
     Returns:
         success: True if balance was credited (or already was).
@@ -755,16 +793,18 @@ async def check_payment(
     Errors: Returns success=False if the invoice_id is invalid or expired.
     """
     try:
-        user_id = _get_effective_user_id()
+        session_npub = _get_effective_user_id()
     except ValueError as e:
         return {"success": False, "error": str(e)}
+
+    target_npub = operator_id.strip() if operator_id.strip() else session_npub
 
     btcpay = _get_btcpay()
     cache = _get_ledger_cache()
     s = _get_settings()
 
     return await check_payment_tool(
-        btcpay, cache, user_id, invoice_id,
+        btcpay, cache, target_npub, invoice_id,
         tier_config_json=s.btcpay_tier_config,
         user_tiers_json=s.btcpay_user_tiers,
         default_credit_ttl_seconds=None,  # Authority balances never expire
