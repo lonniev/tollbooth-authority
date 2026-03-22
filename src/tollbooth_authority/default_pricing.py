@@ -124,7 +124,7 @@ def build_default_model() -> PricingModel:
 
     return PricingModel(
         model_id="default",
-        name="Default Pricing",
+        name="Live Tool Pricing",
         is_active=True,
         tools=tools,
         pipeline=[],
