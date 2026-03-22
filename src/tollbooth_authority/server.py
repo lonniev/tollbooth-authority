@@ -1044,7 +1044,7 @@ async def certify_credits(
             authority_npub = nostr_signer.npub
         certifier = AuthorityCertifier(s.upstream_authority_address, authority_npub)
         try:
-            upstream_cert = await certifier.certify_credits(net_sats)
+            upstream_cert = await certifier.certify_credits(amount_sats)
         except AuthorityCertifyError as e:
             ledger.rollback_debit("certify_credits", fee_sats)
             return {"success": False, "error": f"Upstream certification failed: {e}"}
