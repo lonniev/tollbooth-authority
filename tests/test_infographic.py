@@ -33,10 +33,7 @@ def _sample_data(**overrides) -> dict:
                 "invoice_id": "seed_balance_v1",
             }
         ],
-        "fee_schedule": {
-            "rate_percent": 2.0,
-            "min_sats": 10,
-        },
+        "fee_schedule": "Set via pricing model",
     }
     data.update(overrides)
     return data
@@ -81,11 +78,10 @@ class TestRenderOperatorInfographic:
         assert "CERTIFIED" in svg
 
     def test_fee_schedule_displayed(self) -> None:
-        """Fee schedule card shows rate and minimum."""
+        """Fee schedule card shows the fee schedule string."""
         svg = render_operator_infographic(_sample_data())
         assert "FEE SCHEDULE" in svg
-        assert "2.0%" in svg
-        assert "10 sats" in svg
+        assert "Set via pricing model" in svg
 
     def test_tranche_rendered(self) -> None:
         """Active tranche row appears."""
@@ -161,12 +157,11 @@ class TestRenderOperatorInfographic:
         assert _height(svg_tall) > _height(svg_short)
 
     def test_custom_fee_schedule(self) -> None:
-        """Custom fee schedule values are displayed."""
+        """Custom fee schedule string is displayed."""
         svg = render_operator_infographic(
-            _sample_data(fee_schedule={"rate_percent": 5.0, "min_sats": 25})
+            _sample_data(fee_schedule="Custom pricing: 5% rate, 25 sat floor")
         )
-        assert "5.0%" in svg
-        assert "25 sats" in svg
+        assert "Custom pricing: 5% rate, 25 sat floor" in svg
 
     def test_timestamp_in_header(self) -> None:
         """Timestamp from generated_at appears in header."""

@@ -2,12 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Self
-
-from pydantic import model_validator
 from pydantic_settings import BaseSettings
-
-from tollbooth import ToolPricing
 
 
 class AuthoritySettings(BaseSettings):
@@ -27,14 +22,9 @@ class AuthoritySettings(BaseSettings):
     btcpay_tier_config: str | None = None
     btcpay_user_tiers: str | None = None
 
-    # Tax parameters
-    tax_rate_percent: float = 2.0
-    tax_min_sats: int = 10
-
-    # Upstream Authority chain — supply constraint
+    # Upstream Authority chain
     # Empty = Prime Authority (self-sourced supply).
     upstream_authority_address: str = ""
-    upstream_tax_percent: float = 2.0
 
     # Certificate TTL
     certificate_ttl_seconds: int = 600
@@ -52,23 +42,3 @@ class AuthoritySettings(BaseSettings):
     dpyc_enforce_membership: bool = False  # opt-in; safe default
 
     model_config = {"env_file": ".env", "extra": "ignore"}
-
-    @model_validator(mode="after")
-    def _validate_fee_floor(self) -> Self:
-        """Reject configs where the local fee can't cover upstream costs."""
-        if self.upstream_authority_address and self.tax_rate_percent < self.upstream_tax_percent:
-            raise ValueError(
-                f"tax_rate_percent ({self.tax_rate_percent}%) must be >= "
-                f"upstream_tax_percent ({self.upstream_tax_percent}%) or "
-                f"every certification loses money"
-            )
-        return self
-
-    @property
-    def certify_pricing(self) -> ToolPricing:
-        """ToolPricing instance built from existing tax env vars."""
-        return ToolPricing(
-            rate_percent=self.tax_rate_percent,
-            rate_param="amount_sats",
-            min_cost=self.tax_min_sats,
-        )

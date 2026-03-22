@@ -47,21 +47,30 @@ def _make_settings(**overrides) -> AuthoritySettings:
         "thebrain_api_key": "",
         "thebrain_vault_brain_id": "",
         "thebrain_vault_home_id": "",
-        "tax_rate_percent": 2.0,
-        "tax_min_sats": 10,
         "certificate_ttl_seconds": 600,
     }
     defaults.update(overrides)
     return AuthoritySettings(**defaults)
 
 
+def _mock_pricing_resolver():
+    """Return an AsyncMock that resolves certify_credits to 2% ad valorem."""
+    resolver = AsyncMock()
+    resolver.get_tool_pricing = AsyncMock(
+        return_value=ToolPricing(rate_percent=2.0, rate_param="amount_sats", min_cost=10)
+    )
+    return resolver
+
+
 @pytest.fixture(autouse=True)
 def _clean_state():
     import tollbooth_authority.server as srv
     srv._dpyc_sessions.clear()
+    srv._pricing_resolver = _mock_pricing_resolver()
     reset_jti_store()
     yield
     srv._dpyc_sessions.clear()
+    srv._pricing_resolver = None
     reset_jti_store()
 
 
@@ -80,7 +89,7 @@ class TestSelfSimilarCommerceChain:
 
         nostr_signer = _make_nostr_signer()
         pricing = ToolPricing(rate_percent=2.0, rate_param="amount_sats", min_cost=10)
-        settings = _make_settings(tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600)
+        settings = _make_settings(certificate_ttl_seconds=600)
 
         ledger = _ledger_with_balance(5000)
         cache = MagicMock(spec=LedgerCache)
@@ -220,7 +229,7 @@ class TestSelfSimilarCommerceChain:
             patch.object(srv, "_get_authority_npub", new_callable=AsyncMock, return_value=nostr_signer.npub),
             patch("tollbooth.authority_client.AuthorityCertifier") as MockCertifierClass,
         ):
-            MockCertifierClass.return_value.certify = AsyncMock(
+            MockCertifierClass.return_value.certify_credits = AsyncMock(
                 side_effect=AuthorityCertifyError("insufficient balance")
             )
             result = await srv.certify_credits("op-1", 1000)

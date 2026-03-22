@@ -79,7 +79,7 @@ def render_operator_infographic(data: dict[str, Any]) -> str:
     fees_paid = summary.get("total_fees_paid_sats", 0)
     certified = summary.get("total_certified_sats", 0)
     tranches: list[dict[str, Any]] = data.get("active_tranches", [])
-    fee_schedule = data.get("fee_schedule", {})
+    fee_schedule = data.get("fee_schedule", "See pricing model")
     generated_at = data.get("generated_at", datetime.now(timezone.utc).isoformat())
 
     parts: list[str] = []
@@ -147,10 +147,11 @@ def render_operator_infographic(data: dict[str, Any]) -> str:
     parts.append(_text(CARD_X + 16, cy + 24, "FEE SCHEDULE",
                        size=10, fill=TEXT_GRAY, weight="bold",
                        family="sans-serif"))
-    rate_pct = fee_schedule.get("rate_percent", 2.0)
-    min_sats = fee_schedule.get("min_sats", 10)
-    parts.append(_text(CARD_X + 16, cy + 50,
-                       f"Rate: {rate_pct}%   |   Minimum: {min_sats} sats",
+    fee_label = fee_schedule if isinstance(fee_schedule, str) else (
+        f"Rate: {fee_schedule.get('rate_percent', 2.0)}%   |   "
+        f"Minimum: {fee_schedule.get('min_sats', 10)} sats"
+    )
+    parts.append(_text(CARD_X + 16, cy + 50, fee_label,
                        size=14, fill=TEXT_WHITE))
     cy += fee_h + 12
 

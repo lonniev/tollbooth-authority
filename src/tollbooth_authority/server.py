@@ -340,6 +340,50 @@ def _get_pricing_store() -> Any:
     return _pricing_store
 
 
+# ---------------------------------------------------------------------------
+# Pricing resolver singleton
+# ---------------------------------------------------------------------------
+
+_pricing_resolver: Any = None
+
+
+async def _get_pricing_resolver() -> Any:
+    global _pricing_resolver
+    if _pricing_resolver is not None:
+        return _pricing_resolver
+    from tollbooth.pricing_resolver import PricingResolver
+    from tollbooth_authority.default_pricing import build_default_model
+
+    try:
+        store = _get_pricing_store()
+        nostr_signer = _get_nostr_signer()
+        _pricing_resolver = PricingResolver(
+            store=store,
+            operator=nostr_signer.npub,
+        )
+    except RuntimeError:
+        # No Neon — use default pricing model directly
+        default = build_default_model()
+        fallback = {tp.tool_name: tp.price_sats for tp in default.tools}
+        _pricing_resolver = _DefaultPricingResolver(default)
+    return _pricing_resolver
+
+
+class _DefaultPricingResolver:
+    """Minimal resolver backed by the default pricing model (no Neon)."""
+
+    def __init__(self, model: Any) -> None:
+        self._model = model
+
+    async def get_tool_pricing(self, tool_name: str) -> Any:
+        from tollbooth.pricing import ToolPricing
+
+        for tp in self._model.tools:
+            if tp.tool_name == tool_name:
+                return tp.to_tool_pricing()
+        return ToolPricing()
+
+
 async def _get_authority_npub() -> str | None:
     """Read the curator npub: NeonVault → env var → None."""
     global _cached_authority_npub
@@ -903,18 +947,9 @@ async def operator_status() -> dict[str, Any]:
         "nostr_certificate_enabled": True,
     }
 
-    # Surface certification fee info
-    pricing = s.certify_pricing
-    result["certification_fee"] = {
-        "rate_percent": pricing.rate_percent,
-        "min_sats": pricing.min_cost,
-    }
-
     # Surface upstream chain config so operators can see the authority hierarchy
     if s.upstream_authority_address:
         result["upstream_authority_address"] = s.upstream_authority_address
-        result["upstream_tax_percent"] = s.upstream_tax_percent
-        result["upstream_supply_mode"] = "auto"
 
     if s.dpyc_enforce_membership:
         result["dpyc_registry_enforcement"] = True
@@ -1010,8 +1045,10 @@ async def certify_credits(
     cache = _get_ledger_cache()
     replay = _get_replay_tracker()
 
-    # Compute certification fee via ToolPricing
-    fee_sats = s.certify_pricing.compute(amount_sats=amount_sats)
+    # Compute certification fee from the pricing model
+    resolver = await _get_pricing_resolver()
+    pricing = await resolver.get_tool_pricing("authority_certify_credits")
+    fee_sats = pricing.compute(amount_sats=amount_sats)
     net_sats = amount_sats - fee_sats
 
     # Debit operator balance
@@ -1511,10 +1548,7 @@ async def account_statement() -> dict[str, Any]:
             ),
         },
         "active_tranches": tranches,
-        "fee_schedule": {
-            "rate_percent": s.certify_pricing.rate_percent,
-            "min_sats": s.certify_pricing.min_cost,
-        },
+        "fee_schedule": "See pricing model for certify_credits ad valorem rate.",
     }
 
 

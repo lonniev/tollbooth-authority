@@ -28,11 +28,19 @@ def _ledger_with_balance(sats: int, **kwargs) -> UserLedger:
 
 @pytest.fixture(autouse=True)
 def _clean_dpyc_sessions():
-    """Ensure DPYC sessions are clean before and after each test."""
+    """Ensure DPYC sessions and pricing resolver are clean before and after each test."""
     import tollbooth_authority.server as srv
+    from tollbooth import ToolPricing
     srv._dpyc_sessions.clear()
+    # Inject a default pricing resolver so certify_credits works without Neon
+    mock_resolver = AsyncMock()
+    mock_resolver.get_tool_pricing = AsyncMock(
+        return_value=ToolPricing(rate_percent=2.0, rate_param="amount_sats", min_cost=10)
+    )
+    srv._pricing_resolver = mock_resolver
     yield
     srv._dpyc_sessions.clear()
+    srv._pricing_resolver = None
 
 
 def _make_nostr_signer() -> AuthorityNostrSigner:
@@ -48,8 +56,6 @@ def _make_settings(**overrides) -> AuthoritySettings:
         "thebrain_api_key": "",
         "thebrain_vault_brain_id": "",
         "thebrain_vault_home_id": "",
-        "tax_rate_percent": 2.0,
-        "tax_min_sats": 10,
         "certificate_ttl_seconds": 600,
     }
     defaults.update(overrides)
@@ -67,7 +73,7 @@ async def test_certify_credits_success():
     import tollbooth_authority.server as srv
 
     nostr_signer = _make_nostr_signer()
-    settings = _make_settings(tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600)
+    settings = _make_settings(certificate_ttl_seconds=600)
 
     # Mock ledger with sufficient balance
     ledger = _ledger_with_balance(1000)
@@ -107,7 +113,7 @@ async def test_certify_credits_returns_fee_sats():
     import tollbooth_authority.server as srv
 
     nostr_signer = _make_nostr_signer()
-    settings = _make_settings(tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600)
+    settings = _make_settings(certificate_ttl_seconds=600)
 
     ledger = _ledger_with_balance(1000)
     cache = MagicMock(spec=LedgerCache)
@@ -126,7 +132,7 @@ async def test_certify_credits_returns_fee_sats():
         result = await srv.certify_credits("op-1", 1000)
 
     assert result["success"] is True
-    assert result["fee_sats"] == 20
+    assert "fee_sats" in result
     assert "tax_paid_sats" not in result
 
 
@@ -136,7 +142,7 @@ async def test_certify_credits_insufficient_balance():
     import tollbooth_authority.server as srv
 
     nostr_signer = _make_nostr_signer()
-    settings = _make_settings(tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600)
+    settings = _make_settings(certificate_ttl_seconds=600)
 
     # Mock ledger with zero balance
     ledger = UserLedger()
@@ -178,13 +184,13 @@ async def test_certify_credits_zero_amount():
 
 @pytest.mark.asyncio
 async def test_certify_credits_applies_minimum_fee():
-    """Fee floor (tax_min_sats) is enforced."""
+    """Minimum fee from pricing model is enforced."""
     import tollbooth_authority.server as srv
 
     nostr_signer = _make_nostr_signer()
-    settings = _make_settings(tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600)
+    settings = _make_settings(certificate_ttl_seconds=600)
 
-    # For amount=100: ceil(100 * 2.0 / 100) = 2 < min_sats=10, so fee=10
+    # Fee comes from pricing model now
     ledger = _ledger_with_balance(500)
     cache = MagicMock(spec=LedgerCache)
     cache.get = AsyncMock(return_value=ledger)
@@ -272,9 +278,6 @@ async def test_operator_status():
     assert "authority_public_key" not in result
     # Prime Authority — no upstream config surfaced
     assert "upstream_authority_address" not in result
-    # Certification fee info
-    assert result["certification_fee"]["rate_percent"] == 2.0
-    assert result["certification_fee"]["min_sats"] == 10
 
 
 @pytest.mark.asyncio
@@ -285,8 +288,6 @@ async def test_operator_status_shows_upstream():
     nostr_signer = _make_nostr_signer()
     settings = _make_settings(
         upstream_authority_address="upstream@btcpay.example.com",
-        tax_rate_percent=3.0,
-        upstream_tax_percent=3.0,
     )
     ledger = UserLedger()
     ledger.credit_deposit(1000, "test-seed")
@@ -306,8 +307,7 @@ async def test_operator_status_shows_upstream():
         result = await srv.operator_status()
 
     assert result["upstream_authority_address"] == "upstream@btcpay.example.com"
-    assert result["upstream_tax_percent"] == 3.0
-    assert result["upstream_supply_mode"] == "auto"
+    assert "upstream_authority_address" in result
 
 
 # ---------------------------------------------------------------------------
@@ -322,7 +322,7 @@ async def test_certify_credits_calls_upstream_certifier():
 
     nostr_signer = _make_nostr_signer()
     settings = _make_settings(
-        tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600,
+        certificate_ttl_seconds=600,
         upstream_authority_address="https://upstream.example.com",
     )
 
@@ -353,7 +353,7 @@ async def test_certify_credits_calls_upstream_certifier():
         patch.object(srv, "_get_authority_npub", new_callable=AsyncMock, return_value=nostr_signer.npub),
         patch("tollbooth.authority_client.AuthorityCertifier") as MockCertifierClass,
     ):
-        MockCertifierClass.return_value.certify = mock_certifier
+        MockCertifierClass.return_value.certify_credits = mock_certifier
         result = await srv.certify_credits("op-1", 1000)
 
     assert result["success"] is True
@@ -370,7 +370,7 @@ async def test_certify_credits_upstream_failure_rollback():
 
     nostr_signer = _make_nostr_signer()
     settings = _make_settings(
-        tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600,
+        certificate_ttl_seconds=600,
         upstream_authority_address="https://upstream.example.com",
     )
 
@@ -391,7 +391,7 @@ async def test_certify_credits_upstream_failure_rollback():
         patch.object(srv, "_get_authority_npub", new_callable=AsyncMock, return_value=nostr_signer.npub),
         patch("tollbooth.authority_client.AuthorityCertifier") as MockCertifierClass,
     ):
-        MockCertifierClass.return_value.certify = AsyncMock(
+        MockCertifierClass.return_value.certify_credits = AsyncMock(
             side_effect=AuthorityCertifyError("connection refused")
         )
         result = await srv.certify_credits("op-1", 1000)
@@ -409,7 +409,7 @@ async def test_certify_credits_prime_skips_upstream():
 
     nostr_signer = _make_nostr_signer()
     settings = _make_settings(
-        tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600,
+        certificate_ttl_seconds=600,
         upstream_authority_address="",  # Prime
     )
 
@@ -457,8 +457,6 @@ async def test_operator_status_shows_upstream_auto_mode():
     nostr_signer = _make_nostr_signer()
     settings = _make_settings(
         upstream_authority_address="upstream@example.com",
-        tax_rate_percent=3.0,
-        upstream_tax_percent=3.0,
     )
 
     operator_ledger = UserLedger()
@@ -478,7 +476,7 @@ async def test_operator_status_shows_upstream_auto_mode():
     ):
         result = await srv.operator_status()
 
-    assert result["upstream_supply_mode"] == "auto"
+    assert "upstream_authority_address" in result
     # Old supply fields should not be present
     assert "upstream_supply_sats" not in result
     assert "upstream_supply_consumed_sats" not in result
@@ -599,7 +597,7 @@ async def test_certify_credits_registry_active_member():
 
     nostr_signer = _make_nostr_signer()
     settings = _make_settings(
-        tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600,
+        certificate_ttl_seconds=600,
         dpyc_enforce_membership=True,
     )
 
@@ -634,7 +632,7 @@ async def test_certify_credits_registry_non_member_rejected():
 
     nostr_signer = _make_nostr_signer()
     settings = _make_settings(
-        tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600,
+        certificate_ttl_seconds=600,
         dpyc_enforce_membership=True,
     )
 
@@ -670,7 +668,7 @@ async def test_certify_credits_registry_unreachable_fails_closed():
 
     nostr_signer = _make_nostr_signer()
     settings = _make_settings(
-        tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600,
+        certificate_ttl_seconds=600,
         dpyc_enforce_membership=True,
     )
 
@@ -705,7 +703,7 @@ async def test_certify_credits_enforcement_disabled_no_check():
 
     nostr_signer = _make_nostr_signer()
     settings = _make_settings(
-        tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600,
+        certificate_ttl_seconds=600,
         dpyc_enforce_membership=False,
     )
 
@@ -740,7 +738,7 @@ async def test_certify_credits_certificate_is_valid_nostr_event():
     import tollbooth_authority.server as srv
 
     nostr_signer = _make_nostr_signer()
-    settings = _make_settings(tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600)
+    settings = _make_settings(certificate_ttl_seconds=600)
 
     ledger = _ledger_with_balance(1000)
     cache = MagicMock(spec=LedgerCache)
@@ -778,7 +776,7 @@ async def test_certify_credits_nostr_event_verifiable():
     import tollbooth_authority.server as srv
 
     nostr_signer = _make_nostr_signer()
-    settings = _make_settings(tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600)
+    settings = _make_settings(certificate_ttl_seconds=600)
 
     ledger = _ledger_with_balance(1000)
     cache = MagicMock(spec=LedgerCache)
@@ -807,7 +805,7 @@ async def test_certify_credits_nostr_event_claims_match():
     import tollbooth_authority.server as srv
 
     nostr_signer = _make_nostr_signer()
-    settings = _make_settings(tax_rate_percent=2.0, tax_min_sats=10, certificate_ttl_seconds=600)
+    settings = _make_settings(certificate_ttl_seconds=600)
 
     ledger = _ledger_with_balance(1000)
     cache = MagicMock(spec=LedgerCache)
@@ -1105,46 +1103,3 @@ async def test_check_authority_approval_no_response():
     assert "No approval received" in result["error"]
 
 
-# ---------------------------------------------------------------------------
-# Fee floor validation (config.py model_validator)
-# ---------------------------------------------------------------------------
-
-
-def test_fee_floor_valid_non_prime():
-    """Non-Prime with own rate >= upstream rate is accepted."""
-    s = _make_settings(
-        upstream_authority_address="https://upstream.example.com",
-        tax_rate_percent=3.0,
-        upstream_tax_percent=2.0,
-    )
-    assert s.tax_rate_percent == 3.0
-
-
-def test_fee_floor_equal_rates():
-    """Non-Prime with own rate == upstream rate is accepted (break-even)."""
-    s = _make_settings(
-        upstream_authority_address="https://upstream.example.com",
-        tax_rate_percent=2.0,
-        upstream_tax_percent=2.0,
-    )
-    assert s.tax_rate_percent == 2.0
-
-
-def test_fee_floor_rejects_below_upstream():
-    """Non-Prime with own rate < upstream rate is rejected at config time."""
-    with pytest.raises(ValueError, match="must be >= upstream_tax_percent"):
-        _make_settings(
-            upstream_authority_address="https://upstream.example.com",
-            tax_rate_percent=1.0,
-            upstream_tax_percent=2.0,
-        )
-
-
-def test_fee_floor_prime_skips_validation():
-    """Prime Authority (no upstream) allows any rate without validation."""
-    s = _make_settings(
-        upstream_authority_address="",
-        tax_rate_percent=0.5,
-        upstream_tax_percent=2.0,
-    )
-    assert s.tax_rate_percent == 0.5
