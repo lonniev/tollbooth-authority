@@ -124,7 +124,7 @@ def build_default_model() -> PricingModel:
 
     return PricingModel(
         model_id="default",
-        name="Authority Default Pricing",
+        name="Default Pricing",
         is_active=True,
         tools=tools,
         pipeline=[],
