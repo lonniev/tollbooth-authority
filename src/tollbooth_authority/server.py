@@ -745,6 +745,29 @@ async def register_operator(
     cache.mark_dirty(npub)
     await cache.flush_user(npub)
 
+    # Provision isolated Neon schema for this operator
+    neon_url = ""
+    try:
+        config_vault = _get_config_vault()
+        if config_vault:
+            from tollbooth_authority.tenant_provisioner import (
+                ensure_bootstrap_table,
+                provision_operator_schema,
+                store_operator_config,
+                schema_name_for_npub,
+                neon_url_with_schema,
+            )
+            await ensure_bootstrap_table(config_vault)
+            schema = await provision_operator_schema(config_vault, npub)
+            s = _get_settings()
+            if s.neon_database_url:
+                neon_url = neon_url_with_schema(s.neon_database_url, schema)
+                await store_operator_config(config_vault, npub, "neon_database_url", neon_url)
+                await store_operator_config(config_vault, npub, "schema", schema)
+                logger.info("Provisioned Neon tenant for operator %s schema=%s", npub[:16], schema)
+    except Exception as exc:
+        logger.warning("Neon tenant provisioning failed (non-fatal): %s", exc)
+
     # Register operator in community registry via Oracle (MCP-to-MCP)
     commit_url = ""
     try:
@@ -752,11 +775,10 @@ async def register_operator(
         commit_url = await _register_operator_via_oracle(
             operator_npub=npub,
             display_name=npub[:16] + "...",
-            service_url="",  # Operator's MCP URL — not yet known at registration time
+            service_url="",
             authority_npub=signer.npub,
         )
     except Exception as exc:
-        # Registration in Oracle is best-effort — ledger is already created
         logger.warning("Oracle operator registration failed (non-fatal): %s", exc)
 
     return {
@@ -766,6 +788,65 @@ async def register_operator(
         "dpyc_npub": npub,
         "commit_url": commit_url,
         "message": f"Operator {npub} registered with Authority. Use purchase_credits to fund your balance.",
+    }
+
+
+@tool
+async def get_operator_config(
+    npub: Annotated[
+        str,
+        Field(description="Your Nostr npub (bech32). Must match the operator_proof signature."),
+    ] = "",
+    operator_proof: Annotated[
+        str,
+        Field(description="Schnorr-signed Nostr event (kind 27235) proving npub ownership."),
+    ] = "",
+) -> dict[str, Any]:
+    """Retrieve operator bootstrap configuration (Neon URL, schema).
+
+    Returns the operator's isolated Neon connection string and other
+    configuration provisioned during registration. Gated by a Schnorr
+    signature proving ownership of the requested npub.
+
+    This is the bootstrap endpoint: an operator with only its nsec can
+    call this to retrieve its persistence layer configuration.
+    """
+    if not npub.startswith("npub1") or len(npub) < 60:
+        return {"success": False, "error": "Invalid npub format."}
+
+    # Verify operator proof (Schnorr signature)
+    if operator_proof:
+        from tollbooth.operator_proof import verify_operator_proof
+        if not verify_operator_proof(operator_proof, npub, "get_operator_config"):
+            return {"success": False, "error": "Invalid operator proof — signature does not match npub."}
+    else:
+        # Fallback: verify via Horizon OAuth session
+        horizon_id = _require_user_id()
+        session_npub = _dpyc_sessions.get(horizon_id)
+        if session_npub != npub:
+            return {"success": False, "error": "Npub does not match authenticated session."}
+
+    config_vault = _get_config_vault()
+    if not config_vault:
+        return {"success": False, "error": "No persistence layer configured on this Authority."}
+
+    try:
+        from tollbooth_authority.tenant_provisioner import get_all_operator_config
+        config = await get_all_operator_config(config_vault, npub)
+    except Exception as exc:
+        return {"success": False, "error": f"Failed to retrieve config: {exc}"}
+
+    if not config:
+        return {
+            "success": False,
+            "error": f"No configuration found for {npub[:16]}... — operator may not be registered.",
+        }
+
+    return {
+        "success": True,
+        "npub": npub,
+        "config": config,
+        "message": f"Bootstrap configuration for {npub[:16]}... ({len(config)} entries).",
     }
 
 
