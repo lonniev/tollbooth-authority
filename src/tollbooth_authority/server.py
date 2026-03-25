@@ -514,6 +514,43 @@ async def _register_via_oracle(
         return str(result)
 
 
+async def _register_operator_via_oracle(
+    operator_npub: str,
+    display_name: str,
+    service_url: str,
+    authority_npub: str,
+) -> str:
+    """Call the Oracle's register_operator tool via MCP-to-MCP."""
+    from tollbooth.registry import resolve_oracle_service
+
+    signer = _get_nostr_signer()
+    oracle_info = await resolve_oracle_service(signer.npub)
+    oracle_url = oracle_info["url"]
+
+    from fastmcp import Client
+
+    async with Client(oracle_url, auth="oauth") as client:
+        result = await client.call_tool(
+            "register_operator",
+            {
+                "operator_npub": operator_npub,
+                "display_name": display_name,
+                "service_url": service_url,
+                "authority_npub": authority_npub,
+            },
+        )
+        if hasattr(result, "content"):
+            for block in result.content:
+                if hasattr(block, "text"):
+                    import json
+                    try:
+                        data = json.loads(block.text)
+                        return data.get("commit_url", "")
+                    except (json.JSONDecodeError, TypeError):
+                        return block.text
+        return str(result)
+
+
 # ---------------------------------------------------------------------------
 # Auth helpers
 # ---------------------------------------------------------------------------
@@ -708,12 +745,27 @@ async def register_operator(
     cache.mark_dirty(npub)
     await cache.flush_user(npub)
 
+    # Register operator in community registry via Oracle (MCP-to-MCP)
+    commit_url = ""
+    try:
+        signer = _get_nostr_signer()
+        commit_url = await _register_operator_via_oracle(
+            operator_npub=npub,
+            display_name=npub[:16] + "...",
+            service_url="",  # Operator's MCP URL — not yet known at registration time
+            authority_npub=signer.npub,
+        )
+    except Exception as exc:
+        # Registration in Oracle is best-effort — ledger is already created
+        logger.warning("Oracle operator registration failed (non-fatal): %s", exc)
+
     return {
         "success": True,
         "operator_id": npub,
         "balance_sats": ledger.balance_api_sats,
         "dpyc_npub": npub,
-        "message": f"Operator {npub} registered. Purchase tax credits to begin certifying.",
+        "commit_url": commit_url,
+        "message": f"Operator {npub} registered with Authority. Use purchase_credits to fund your balance.",
     }
 
 
