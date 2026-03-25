@@ -551,6 +551,74 @@ async def _register_operator_via_oracle(
         return str(result)
 
 
+async def _update_operator_via_oracle(
+    operator_npub: str,
+    service_url: str,
+    display_name: str,
+    authority_npub: str,
+) -> str:
+    """Call the Oracle's update_operator tool via MCP-to-MCP."""
+    from tollbooth.registry import resolve_oracle_service
+
+    signer = _get_nostr_signer()
+    oracle_info = await resolve_oracle_service(signer.npub)
+    oracle_url = oracle_info["url"]
+
+    from fastmcp import Client
+
+    args: dict = {"operator_npub": operator_npub, "authority_npub": authority_npub}
+    if service_url:
+        args["service_url"] = service_url
+    if display_name:
+        args["display_name"] = display_name
+
+    async with Client(oracle_url, auth="oauth") as client:
+        result = await client.call_tool("update_operator", args)
+        if hasattr(result, "content"):
+            for block in result.content:
+                if hasattr(block, "text"):
+                    import json
+                    try:
+                        data = json.loads(block.text)
+                        return data.get("commit_url", block.text)
+                    except (json.JSONDecodeError, TypeError):
+                        return block.text
+        return str(result)
+
+
+async def _deregister_operator_via_oracle(
+    operator_npub: str,
+    authority_npub: str,
+) -> str:
+    """Call the Oracle's deregister_operator tool via MCP-to-MCP."""
+    from tollbooth.registry import resolve_oracle_service
+
+    signer = _get_nostr_signer()
+    oracle_info = await resolve_oracle_service(signer.npub)
+    oracle_url = oracle_info["url"]
+
+    from fastmcp import Client
+
+    async with Client(oracle_url, auth="oauth") as client:
+        result = await client.call_tool(
+            "deregister_operator",
+            {
+                "operator_npub": operator_npub,
+                "authority_npub": authority_npub,
+            },
+        )
+        if hasattr(result, "content"):
+            for block in result.content:
+                if hasattr(block, "text"):
+                    import json
+                    try:
+                        data = json.loads(block.text)
+                        return data.get("commit_url", block.text)
+                    except (json.JSONDecodeError, TypeError):
+                        return block.text
+        return str(result)
+
+
 # ---------------------------------------------------------------------------
 # Auth helpers
 # ---------------------------------------------------------------------------
@@ -694,6 +762,16 @@ async def register_operator(
             ),
         ),
     ] = "",
+    service_url: Annotated[
+        str,
+        Field(
+            description=(
+                "The operator's public MCP endpoint URL (e.g. "
+                "'https://my-service.fastmcp.app/mcp'). Required for "
+                "community registry registration."
+            ),
+        ),
+    ] = "",
 ) -> dict[str, Any]:
     """Provision an operator in the Authority ledger via Horizon OAuth identity.
 
@@ -775,7 +853,7 @@ async def register_operator(
         commit_url = await _register_operator_via_oracle(
             operator_npub=npub,
             display_name=npub[:16] + "...",
-            service_url="",
+            service_url=service_url,
             authority_npub=signer.npub,
         )
     except Exception as exc:
@@ -789,6 +867,90 @@ async def register_operator(
         "commit_url": commit_url,
         "message": f"Operator {npub} registered with Authority. Use purchase_credits to fund your balance.",
     }
+
+
+@tool
+async def update_operator(
+    npub: Annotated[
+        str,
+        Field(
+            description="Nostr npub of the Operator to update.",
+        ),
+    ] = "",
+    service_url: Annotated[
+        str,
+        Field(
+            description="New MCP endpoint URL (leave empty to keep current).",
+        ),
+    ] = "",
+    display_name: Annotated[
+        str,
+        Field(
+            description="New display name (leave empty to keep current).",
+        ),
+    ] = "",
+) -> dict[str, Any]:
+    """Update an existing Operator's community registry entry.
+
+    Use when an Operator moves to a new MCP endpoint or changes its
+    display name. Forwards the update to the Oracle via MCP-to-MCP.
+    """
+    if not npub.startswith("npub1") or len(npub) < 60:
+        return {"success": False, "error": "Invalid npub format."}
+    if not service_url and not display_name:
+        return {"success": False, "error": "Nothing to update. Provide service_url and/or display_name."}
+
+    try:
+        signer = _get_nostr_signer()
+        commit_url = await _update_operator_via_oracle(
+            operator_npub=npub,
+            service_url=service_url,
+            display_name=display_name,
+            authority_npub=signer.npub,
+        )
+        return {
+            "success": True,
+            "commit_url": commit_url,
+            "message": f"Operator {npub[:16]}... updated in community registry.",
+        }
+    except Exception as exc:
+        logger.warning("Oracle operator update failed: %s", exc)
+        return {"success": False, "error": f"Update failed: {exc}"}
+
+
+@tool
+async def deregister_operator(
+    npub: Annotated[
+        str,
+        Field(
+            description="Nostr npub of the Operator to deregister.",
+        ),
+    ] = "",
+) -> dict[str, Any]:
+    """Remove an Operator from the DPYC community registry.
+
+    An Operator cannot exist without a sponsoring Authority. When an
+    Authority disowns an Operator, the Operator is removed from the
+    community registry entirely, returning it to initial (unregistered)
+    state. Forwards the request to the Oracle via MCP-to-MCP.
+    """
+    if not npub.startswith("npub1") or len(npub) < 60:
+        return {"success": False, "error": "Invalid npub format."}
+
+    try:
+        signer = _get_nostr_signer()
+        commit_url = await _deregister_operator_via_oracle(
+            operator_npub=npub,
+            authority_npub=signer.npub,
+        )
+        return {
+            "success": True,
+            "commit_url": commit_url,
+            "message": f"Operator {npub[:16]}... removed from community registry.",
+        }
+    except Exception as exc:
+        logger.warning("Oracle operator deregistration failed: %s", exc)
+        return {"success": False, "error": f"Deregistration failed: {exc}"}
 
 
 @tool
