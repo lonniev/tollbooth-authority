@@ -644,26 +644,46 @@ def _require_user_id() -> str:
 # ---------------------------------------------------------------------------
 # DPYC identity (npub-primary: npub is the sole credit identity)
 # ---------------------------------------------------------------------------
+#
+# The npub is the SOLE identity for all ledger/credit operations.
+# Horizon OAuth is the transport auth layer (gates access to the MCP)
+# but DOES NOT determine which npub is acting.
+#
+# _dpyc_sessions is an optimization cache: it remembers which npub
+# the current OAuth user last identified as, so tools that don't
+# pass an explicit npub can still resolve one. It is NEVER
+# authoritative — an explicit npub parameter always wins.
 
-_dpyc_sessions: dict[str, str] = {}  # Horizon user_id → npub
+_dpyc_sessions: dict[str, str] = {}  # Horizon user_id → last-used npub (cache only)
 _dpyc_registry: DPYCRegistry | None = None
 
 
-def _get_effective_user_id() -> str:
-    """Return the npub for the current user. Requires an active DPYC session.
+def _get_effective_user_id(npub: str | None = None) -> str:
+    """Return the npub for the current operation.
 
-    Raises ValueError if no DPYC session is active (npub not set).
-    Horizon OAuth remains the transport auth layer, but the npub is the
-    sole identity for all ledger/credit operations.
+    Args:
+        npub: Explicit npub from the tool call. If provided and valid,
+              used directly (and cached for subsequent calls).
+
+    Falls back to the session cache if no explicit npub is provided.
+    Raises ValueError if neither is available.
     """
+    if npub and npub.startswith("npub1") and len(npub) >= 60:
+        # Explicit npub — use it and update the cache
+        user_id = _get_current_user_id()
+        if user_id:
+            _dpyc_sessions[user_id] = npub
+        return npub
+
+    # Fallback: session cache
     horizon_id = _require_user_id()
-    npub = _dpyc_sessions.get(horizon_id)
-    if not npub:
+    cached = _dpyc_sessions.get(horizon_id)
+    if not cached:
         raise ValueError(
             "No DPYC identity active. Call register_operator(npub=...) first. "
             "Get your npub from the dpyc-oracle's how_to_join() tool."
         )
-    return npub
+    return cached
 
 
 def _get_dpyc_registry() -> DPYCRegistry | None:
@@ -813,10 +833,11 @@ async def register_operator(
             ),
         }
 
-    horizon_id = _require_user_id()
-
-    # Auto-activate DPYC identity
-    _dpyc_sessions[horizon_id] = npub
+    # Cache this npub for the current OAuth session (optimization only —
+    # the npub parameter IS the identity, not the OAuth user)
+    user_id = _get_current_user_id()
+    if user_id:
+        _dpyc_sessions[user_id] = npub
 
     cache = _get_ledger_cache()
     ledger = await cache.get(npub)
