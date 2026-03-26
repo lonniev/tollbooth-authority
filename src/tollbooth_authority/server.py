@@ -649,41 +649,17 @@ def _require_user_id() -> str:
 # Horizon OAuth is the transport auth layer (gates access to the MCP)
 # but DOES NOT determine which npub is acting.
 #
-# _dpyc_sessions is an optimization cache: it remembers which npub
-# the current OAuth user last identified as, so tools that don't
-# pass an explicit npub can still resolve one. It is NEVER
-# authoritative — an explicit npub parameter always wins.
-
-_dpyc_sessions: dict[str, str] = {}  # Horizon user_id → last-used npub (cache only)
 _dpyc_registry: DPYCRegistry | None = None
 
 
-def _get_effective_user_id(npub: str | None = None) -> str:
-    """Return the npub for the current operation.
-
-    Args:
-        npub: Explicit npub from the tool call. If provided and valid,
-              used directly (and cached for subsequent calls).
-
-    Falls back to the session cache if no explicit npub is provided.
-    Raises ValueError if neither is available.
-    """
-    if npub and npub.startswith("npub1") and len(npub) >= 60:
-        # Explicit npub — use it and update the cache
-        user_id = _get_current_user_id()
-        if user_id:
-            _dpyc_sessions[user_id] = npub
-        return npub
-
-    # Fallback: session cache
-    horizon_id = _require_user_id()
-    cached = _dpyc_sessions.get(horizon_id)
-    if not cached:
+def _resolve_npub(npub: str) -> str:
+    """Validate and return the npub. No fallback, no session cache."""
+    if not npub or not npub.startswith("npub1") or len(npub) < 60:
         raise ValueError(
-            "No DPYC identity active. Call register_operator(npub=...) first. "
-            "Get your npub from the dpyc-oracle's how_to_join() tool."
+            "npub is required. Pass your Nostr public key (npub1...) "
+            "to identify yourself."
         )
-    return cached
+    return npub
 
 
 def _get_dpyc_registry() -> DPYCRegistry | None:
@@ -739,7 +715,7 @@ async def _graceful_shutdown() -> None:
         await _dpyc_registry.close()
         _dpyc_registry = None
 
-    _dpyc_sessions.clear()
+    pass  # session cache removed
 
 
 async def _shutdown_flush_and_stop() -> None:
@@ -832,12 +808,6 @@ async def register_operator(
                 "Get your npub from the dpyc-oracle's how_to_join() tool."
             ),
         }
-
-    # Cache this npub for the current OAuth session (optimization only —
-    # the npub parameter IS the identity, not the OAuth user)
-    user_id = _get_current_user_id()
-    if user_id:
-        _dpyc_sessions[user_id] = npub
 
     cache = _get_ledger_cache()
     ledger = await cache.get(npub)
@@ -1003,11 +973,8 @@ async def get_operator_config(
         if not verify_operator_proof(operator_proof, npub, "get_operator_config"):
             return {"success": False, "error": "Invalid operator proof — signature does not match npub."}
     else:
-        # Fallback: verify via Horizon OAuth session
-        horizon_id = _require_user_id()
-        session_npub = _dpyc_sessions.get(horizon_id)
-        if session_npub != npub:
-            return {"success": False, "error": "Npub does not match authenticated session."}
+        # No operator proof — require Horizon OAuth identity match
+        return {"success": False, "error": "operator_proof is required when not providing a Schnorr signature."}
 
     config_vault = _get_config_vault()
     if not config_vault:
@@ -1087,11 +1054,11 @@ async def purchase_credits(
     BTCPay is unreachable.
     """
     try:
-        session_npub = _get_effective_user_id()
-    except ValueError as e:
-        return {"success": False, "error": str(e)}
-
-    target_npub = operator_id.strip() if operator_id.strip() else session_npub
+        target_npub = _resolve_npub(operator_id.strip()) if operator_id.strip() else None
+    except ValueError:
+        target_npub = None
+    if not target_npub:
+        return {"success": False, "error": "operator_id (npub) is required for purchase_credits."}
 
     btcpay = _get_btcpay()
     cache = _get_ledger_cache()
@@ -1125,10 +1092,9 @@ async def check_payment(
         Field(
             default="",
             description=(
-                "Optional: the operator npub whose ledger should be credited. "
+                "The operator npub whose ledger should be credited. "
                 "Must match the operator_id used in the purchase_credits call "
-                "that created this invoice. If empty, defaults to the session's "
-                "registered npub."
+                "that created this invoice."
             ),
         ),
     ] = "",
@@ -1153,11 +1119,11 @@ async def check_payment(
     Errors: Returns success=False if the invoice_id is invalid or expired.
     """
     try:
-        session_npub = _get_effective_user_id()
-    except ValueError as e:
-        return {"success": False, "error": str(e)}
-
-    target_npub = operator_id.strip() if operator_id.strip() else session_npub
+        target_npub = _resolve_npub(operator_id.strip()) if operator_id.strip() else None
+    except ValueError:
+        target_npub = None
+    if not target_npub:
+        return {"success": False, "error": "operator_id (npub) is required for check_payment."}
 
     btcpay = _get_btcpay()
     cache = _get_ledger_cache()
@@ -1172,7 +1138,7 @@ async def check_payment(
 
 
 @tool
-async def check_balance() -> dict[str, Any]:
+async def check_balance(npub: str = "") -> dict[str, Any]:
     """Check your current operator credit balance, total deposited, total consumed, and pending invoices.
 
     Read-only — no side effects. Call anytime to check your funding level
@@ -1187,7 +1153,7 @@ async def check_balance() -> dict[str, Any]:
     Next step: If balance is low, call purchase_credits to top up.
     """
     try:
-        user_id = _get_effective_user_id()
+        user_id = _resolve_npub(npub)
     except ValueError as e:
         return {"success": False, "error": str(e)}
 
@@ -1222,7 +1188,7 @@ async def check_balance() -> dict[str, Any]:
 
 
 @tool
-async def operator_status() -> dict[str, Any]:
+async def operator_status(npub: str = "") -> dict[str, Any]:
     """View your registration status, balance summary, and the Authority's Nostr npub.
 
     Call this to retrieve the Authority's npub for configuring your
@@ -1242,7 +1208,7 @@ async def operator_status() -> dict[str, Any]:
     Schnorr-signed Nostr event certificates locally.
     """
     try:
-        user_id = _get_effective_user_id()
+        user_id = _resolve_npub(npub)
     except ValueError as e:
         return {"success": False, "error": str(e)}
 
@@ -1825,14 +1791,14 @@ async def check_authority_approval(
 
 
 @tool
-async def account_statement() -> dict[str, Any]:
+async def account_statement(npub: str = "") -> dict[str, Any]:
     """Get a structured JSON account statement for the current operator.
 
     Returns the operator's credit balance, deposit history, fees paid,
     total certified amount, active tranches, and the Authority's fee schedule.
     """
     try:
-        user_id = _get_effective_user_id()
+        user_id = _resolve_npub(npub)
     except ValueError as e:
         return {"success": False, "error": str(e)}
 
@@ -1869,7 +1835,7 @@ async def account_statement() -> dict[str, Any]:
 
 
 @tool
-async def account_statement_infographic() -> dict[str, Any]:
+async def account_statement_infographic(npub: str = "") -> dict[str, Any]:
     """Get a visual SVG infographic of the operator's account statement.
 
     Returns the same data as account_statement, plus an SVG rendering
@@ -1877,7 +1843,7 @@ async def account_statement_infographic() -> dict[str, Any]:
     """
     from tollbooth_authority.infographic import render_operator_infographic
 
-    data = await account_statement()
+    data = await account_statement(npub=npub)
     if not data.get("success"):
         return data
 
@@ -1957,18 +1923,12 @@ async def set_pricing_model(model_json: str) -> dict[str, Any]:
     # Verify caller is the operator (skip in STDIO mode)
     user_id = _get_current_user_id()
     if user_id is not None:
-        try:
-            caller_npub = _get_effective_user_id()
-        except ValueError as e:
-            return {"status": "error", "error": str(e)}
-        if caller_npub != operator:
-            # Allow if a valid operator proof was provided
-            if not operator_proof:
-                return {"status": "error", "error": "Only the operator can modify pricing"}
-            from tollbooth.operator_proof import verify_operator_proof
+        if not operator_proof:
+            return {"status": "error", "error": "Only the operator can modify pricing — provide operator_proof."}
+        from tollbooth.operator_proof import verify_operator_proof
 
-            if not verify_operator_proof(operator_proof, operator, "set_pricing_model"):
-                return {"status": "error", "error": "Only the operator can modify pricing"}
+        if not verify_operator_proof(operator_proof, operator, "set_pricing_model"):
+            return {"status": "error", "error": "Only the operator can modify pricing"}
 
     from tollbooth.tools.pricing import set_pricing_model_tool
 
