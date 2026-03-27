@@ -65,11 +65,9 @@ def _mock_pricing_resolver():
 @pytest.fixture(autouse=True)
 def _clean_state():
     import tollbooth_authority.server as srv
-    srv._dpyc_sessions.clear()
     srv._pricing_resolver = _mock_pricing_resolver()
     reset_jti_store()
     yield
-    srv._dpyc_sessions.clear()
     srv._pricing_resolver = None
     reset_jti_store()
 
