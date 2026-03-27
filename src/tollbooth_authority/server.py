@@ -832,6 +832,23 @@ async def register_operator(
                 await store_operator_config(config_vault, npub, "neon_database_url", neon_url)
                 await store_operator_config(config_vault, npub, "schema", schema)
                 logger.info("Provisioned Neon tenant for operator %s schema=%s", npub[:16], schema)
+
+                # Send bootstrap config to operator via Nostr DM
+                try:
+                    from tollbooth.bootstrap_relay import send_bootstrap_config
+                    signer = _get_nostr_signer()
+                    sent = send_bootstrap_config(
+                        authority_nsec=signer.nsec,
+                        operator_npub=npub,
+                        config={"neon_database_url": neon_url, "schema": schema},
+                    )
+                    if sent:
+                        logger.info("Bootstrap config DM sent to operator %s", npub[:16])
+                    else:
+                        logger.warning("Failed to send bootstrap config DM to operator %s", npub[:16])
+                except Exception as dm_exc:
+                    logger.warning("Bootstrap config DM failed (non-fatal): %s", dm_exc)
+
     except Exception as exc:
         logger.warning("Neon tenant provisioning failed (non-fatal): %s", exc)
 
@@ -853,6 +870,7 @@ async def register_operator(
         "operator_id": npub,
         "balance_sats": ledger.balance_api_sats,
         "dpyc_npub": npub,
+        "neon_database_url": neon_url,
         "commit_url": commit_url,
         "message": f"Operator {npub} registered with Authority. Use purchase_credits to fund your balance.",
     }

@@ -35,6 +35,11 @@ class AuthorityNostrSigner:
         self._pubkey_hex: str = self._private_key.public_key.hex()
 
     @property
+    def nsec(self) -> str:
+        """Authority's private key as hex string."""
+        return self._private_key.hex()
+
+    @property
     def npub(self) -> str:
         """Authority's public key in bech32 npub format."""
         return self._private_key.public_key.bech32()
