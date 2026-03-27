@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 
-import pytest
 
 from tollbooth_authority.infographic import render_operator_infographic
 

@@ -29,6 +29,12 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/tollbooth_authority"]
 
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+ignore = ["E501"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

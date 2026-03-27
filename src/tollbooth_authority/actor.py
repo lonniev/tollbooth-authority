@@ -9,8 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from tollbooth.actor_types import ActorRole, ToolPath, ToolPathInfo
-from tollbooth.authority_protocol import AuthorityProtocol
+from tollbooth.actor_types import ToolPath, ToolPathInfo
 
 _CATALOG: list[ToolPathInfo] = [
     # ── Hot-path (local ledger) ──────────────────────────────────

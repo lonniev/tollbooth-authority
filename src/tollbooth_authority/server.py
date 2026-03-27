@@ -15,12 +15,10 @@ from typing import Annotated, Any
 
 from pydantic import Field
 
-logger = logging.getLogger(__name__)
-
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_headers
 
-from tollbooth import BTCPayClient, BTCPayError, LedgerCache, ToolPricing
+from tollbooth import BTCPayClient, LedgerCache
 from tollbooth.slug_tools import make_slug_tool
 from tollbooth.tools.credits import (
     check_balance_tool,
@@ -28,17 +26,19 @@ from tollbooth.tools.credits import (
     direct_purchase_tool,
     reconcile_pending_invoices,
 )
+from tollbooth.vaults import TheBrainVault
 
 from tollbooth_authority import __version__
 from tollbooth_authority.config import AuthoritySettings
+from tollbooth_authority.nostr_signing import AuthorityNostrSigner
 from tollbooth_authority.onboarding import (
     OnboardingState,
     ONBOARDING_TEMPLATES,
 )
 from tollbooth_authority.registry import DEFAULT_REGISTRY_URL, DPYCRegistry, RegistryError
 from tollbooth_authority.replay import ReplayTracker
-from tollbooth_authority.nostr_signing import AuthorityNostrSigner
-from tollbooth.vaults import TheBrainVault
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # FastMCP app
@@ -364,7 +364,6 @@ async def _get_pricing_resolver() -> Any:
     except RuntimeError:
         # No Neon — use default pricing model directly
         default = build_default_model()
-        fallback = {tp.tool_name: tp.price_sats for tp in default.tools}
         _pricing_resolver = _DefaultPricingResolver(default)
     return _pricing_resolver
 
@@ -823,7 +822,6 @@ async def register_operator(
                 ensure_bootstrap_table,
                 provision_operator_schema,
                 store_operator_config,
-                schema_name_for_npub,
                 neon_url_with_schema,
             )
             await ensure_bootstrap_table(config_vault)
@@ -1627,7 +1625,7 @@ async def confirm_authority_claim(
     # Poll for candidate's DM reply
     try:
         exchange = _get_nostr_exchange()
-        claim_result = await exchange.receive(
+        await exchange.receive(
             sender_npub=candidate_npub,
             service="authority_claim",
         )
@@ -1752,7 +1750,7 @@ async def check_authority_approval(
     # Register via Oracle MCP-to-MCP
     commit_url = ""
     try:
-        signer = _get_nostr_signer()
+        _get_nostr_signer()  # validate signer is available
         service_url = await _resolve_own_service_url()
         commit_url = await _register_via_oracle(
             authority_npub=candidate_npub,
@@ -1803,7 +1801,7 @@ async def account_statement(npub: str = "") -> dict[str, Any]:
         return {"success": False, "error": str(e)}
 
     cache = _get_ledger_cache()
-    s = _get_settings()
+    _get_settings()  # validate settings are available
     ledger = await cache.get(user_id)
 
     tranches = [
