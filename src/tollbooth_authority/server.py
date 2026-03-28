@@ -1075,7 +1075,6 @@ async def purchase_credits(
 
     btcpay = _get_btcpay()
     cache = _get_ledger_cache()
-    s = _get_settings()
 
     result = await direct_purchase_tool(
         btcpay, cache, target_npub, amount_sats,
@@ -1138,7 +1137,6 @@ async def check_payment(
 
     btcpay = _get_btcpay()
     cache = _get_ledger_cache()
-    s = _get_settings()
 
     return await check_payment_tool(
         btcpay, cache, target_npub, invoice_id,
@@ -1167,7 +1165,6 @@ async def check_balance(npub: str = "") -> dict[str, Any]:
         return {"success": False, "error": str(e)}
 
     cache = _get_ledger_cache()
-    s = _get_settings()
 
     # One-time reconciliation per user per process lifetime
     if user_id not in _reconciled_users:
