@@ -18,10 +18,6 @@ class AuthoritySettings(BaseSettings):
     thebrain_vault_brain_id: str = ""
     thebrain_vault_home_id: str = ""
 
-    # Tier config (VIP multipliers for operator tax balances)
-    btcpay_tier_config: str | None = None
-    btcpay_user_tiers: str | None = None
-
     # Upstream Authority chain
     # Empty = Prime Authority (self-sourced supply).
     upstream_authority_address: str = ""

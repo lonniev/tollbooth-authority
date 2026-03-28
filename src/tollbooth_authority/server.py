@@ -652,12 +652,9 @@ _dpyc_registry: DPYCRegistry | None = None
 
 
 def _resolve_npub(npub: str) -> str:
-    """Validate and return the npub. No fallback, no session cache."""
+    """Validate and return the npub. Falls back to operator's own npub if empty."""
     if not npub or not npub.startswith("npub1") or len(npub) < 60:
-        raise ValueError(
-            "npub is required. Pass your Nostr public key (npub1...) "
-            "to identify yourself."
-        )
+        return _get_operator_npub()
     return npub
 
 
@@ -1082,8 +1079,6 @@ async def purchase_credits(
 
     result = await direct_purchase_tool(
         btcpay, cache, target_npub, amount_sats,
-        tier_config_json=s.btcpay_tier_config,
-        user_tiers_json=s.btcpay_user_tiers,
         default_credit_ttl_seconds=None,  # Authority balances never expire
     )
     if result.get("success"):
@@ -1147,8 +1142,6 @@ async def check_payment(
 
     return await check_payment_tool(
         btcpay, cache, target_npub, invoice_id,
-        tier_config_json=s.btcpay_tier_config,
-        user_tiers_json=s.btcpay_user_tiers,
         default_credit_ttl_seconds=None,  # Authority balances never expire
     )
 
@@ -1183,9 +1176,7 @@ async def check_balance(npub: str = "") -> dict[str, Any]:
             btcpay = _get_btcpay()
             recon = await reconcile_pending_invoices(
                 btcpay, cache, user_id,
-                tier_config_json=s.btcpay_tier_config,
-                user_tiers_json=s.btcpay_user_tiers,
-                default_credit_ttl_seconds=None,  # Authority balances never expire
+                default_credit_ttl_seconds=None,
             )
             if recon["reconciled"] > 0:
                 logger.info(
@@ -1195,12 +1186,7 @@ async def check_balance(npub: str = "") -> dict[str, Any]:
         except Exception:
             logger.warning("Reconciliation failed for %s (non-fatal).", user_id)
 
-    return await check_balance_tool(
-        cache, user_id,
-        tier_config_json=s.btcpay_tier_config,
-        user_tiers_json=s.btcpay_user_tiers,
-        default_credit_ttl_seconds=None,  # Authority balances never expire
-    )
+    return await check_balance_tool(cache, user_id)
 
 
 @tool
