@@ -706,6 +706,41 @@ def _register_shutdown_handlers() -> None:
 # ---------------------------------------------------------------------------
 
 
+async def _resend_bootstrap_dm(npub: str) -> bool:
+    """Re-send the bootstrap config DM for an already-provisioned operator.
+
+    Looks up the operator's Neon URL from the bootstrap_config table and
+    sends it as a NIP-04 encrypted DM to the operator's npub. Called by
+    register_operator, update_operator, and get_operator_config to ensure
+    the DM is always fresh on relays.
+
+    Returns True if sent successfully.
+    """
+    try:
+        config_vault = _get_config_vault()
+        if not config_vault:
+            return False
+        from tollbooth_authority.tenant_provisioner import get_all_operator_config
+        config = await get_all_operator_config(config_vault, npub)
+        neon_url = config.get("neon_database_url")
+        schema = config.get("schema", "")
+        if not neon_url:
+            return False
+        from tollbooth.bootstrap_relay import send_bootstrap_config
+        signer = _get_nostr_signer()
+        sent = send_bootstrap_config(
+            authority_nsec=signer.nsec,
+            operator_npub=npub,
+            config={"neon_database_url": neon_url, "schema": schema},
+        )
+        if sent:
+            logger.info("Bootstrap config DM (re)sent to operator %s", npub[:16])
+        return sent
+    except Exception as exc:
+        logger.warning("Bootstrap DM resend failed for %s: %s", npub[:16], exc)
+        return False
+
+
 @tool
 async def register_operator(
     npub: Annotated[
@@ -795,20 +830,7 @@ async def register_operator(
                 logger.info("Provisioned Neon tenant for operator %s schema=%s", npub[:16], schema)
 
                 # Send bootstrap config to operator via Nostr DM
-                try:
-                    from tollbooth.bootstrap_relay import send_bootstrap_config
-                    signer = _get_nostr_signer()
-                    sent = send_bootstrap_config(
-                        authority_nsec=signer.nsec,
-                        operator_npub=npub,
-                        config={"neon_database_url": neon_url, "schema": schema},
-                    )
-                    if sent:
-                        logger.info("Bootstrap config DM sent to operator %s", npub[:16])
-                    else:
-                        logger.warning("Failed to send bootstrap config DM to operator %s", npub[:16])
-                except Exception as dm_exc:
-                    logger.warning("Bootstrap config DM failed (non-fatal): %s", dm_exc)
+                await _resend_bootstrap_dm(npub)
 
     except Exception as exc:
         logger.warning("Neon tenant provisioning failed (non-fatal): %s", exc)
@@ -876,6 +898,8 @@ async def update_operator(
             display_name=display_name,
             authority_npub=signer.npub,
         )
+        # Refresh bootstrap DM on relays (ensures operator can cold-start)
+        await _resend_bootstrap_dm(npub)
         return {
             "success": True,
             "commit_url": commit_url,
@@ -968,6 +992,10 @@ async def get_operator_config(
             "success": False,
             "error": f"No configuration found for {npub[:16]}... — operator may not be registered.",
         }
+
+    # Refresh bootstrap DM on relays — if the operator is calling this,
+    # relay-based bootstrap likely failed, so resend.
+    await _resend_bootstrap_dm(npub)
 
     return {
         "success": True,
