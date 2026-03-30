@@ -1145,7 +1145,7 @@ async def check_payment(
 
 
 @tool
-async def check_balance(npub: str = "") -> dict[str, Any]:
+async def check_balance(npub: Annotated[str, Field(description="Nostr public key (npub1...). Defaults to operator identity if empty.")] = "") -> dict[str, Any]:
     """Check your current operator credit balance, total deposited, total consumed, and pending invoices.
 
     Read-only — no side effects. Call anytime to check your funding level
@@ -1187,7 +1187,7 @@ async def check_balance(npub: str = "") -> dict[str, Any]:
 
 
 @tool
-async def operator_status(npub: str = "") -> dict[str, Any]:
+async def operator_status(npub: Annotated[str, Field(description="Nostr public key (npub1...). Defaults to operator identity if empty.")] = "") -> dict[str, Any]:
     """View your registration status, balance summary, and the Authority's Nostr npub.
 
     Call this to retrieve the Authority's npub for configuring your
@@ -1790,7 +1790,7 @@ async def check_authority_approval(
 
 
 @tool
-async def account_statement(npub: str = "") -> dict[str, Any]:
+async def account_statement(npub: Annotated[str, Field(description="Nostr public key (npub1...). Defaults to operator identity if empty.")] = "") -> dict[str, Any]:
     """Get a structured JSON account statement for the current operator.
 
     Returns the operator's credit balance, deposit history, fees paid,
@@ -1834,7 +1834,7 @@ async def account_statement(npub: str = "") -> dict[str, Any]:
 
 
 @tool
-async def account_statement_infographic(npub: str = "") -> dict[str, Any]:
+async def account_statement_infographic(npub: Annotated[str, Field(description="Nostr public key (npub1...). Defaults to operator identity if empty.")] = "") -> dict[str, Any]:
     """Get a visual SVG infographic of the operator's account statement.
 
     Returns the same data as account_statement, plus an SVG rendering
