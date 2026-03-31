@@ -56,7 +56,7 @@ mcp = FastMCP(
         "## First-Time Bootstrap (follow these steps in order)\n\n"
         "1. Call `register_operator(npub=...)` with your Nostr npub — creates your "
         "ledger entry. Get your npub from the dpyc-oracle's how_to_join() tool. "
-        "Returns your operator_id (npub) and a zero balance.\n"
+        "Returns your npub and a zero balance.\n"
         "2. Call `purchase_credits` with the number of sats to pre-fund "
         "(e.g., 1000). Returns a Lightning invoice with a checkoutLink.\n"
         "3. Pay the invoice using any Lightning wallet.\n"
@@ -786,7 +786,7 @@ async def register_operator(
 
     Returns:
         success: Always True on completion.
-        operator_id: Your npub (use this for certify_credits calls).
+        npub: Your npub (use this for certify_credits calls).
         balance_sats: Current credit balance (0 for new registrations).
         message: Human-readable confirmation.
 
@@ -850,7 +850,7 @@ async def register_operator(
 
     return {
         "success": True,
-        "operator_id": npub,
+        "npub": npub,
         "balance_sats": ledger.balance_api_sats,
         "dpyc_npub": npub,
         "neon_database_url": neon_url,
@@ -1018,15 +1018,14 @@ async def purchase_credits(
             ),
         ),
     ],
-    operator_id: Annotated[
+    npub: Annotated[
         str,
         Field(
             default="",
             description=(
-                "Optional: the operator npub whose ledger should receive the credits. "
+                "The operator npub whose ledger should receive the credits. "
                 "Use this when the Horizon OAuth session identity differs from the "
-                "operator's DPYC npub (e.g. funding a service's NSEC-derived npub). "
-                "If empty, defaults to the session's registered npub."
+                "operator's DPYC npub (e.g. funding a service's NSEC-derived npub)."
             ),
         ),
     ] = "",
@@ -1038,11 +1037,6 @@ async def purchase_credits(
     After payment, call check_payment with the returned invoice_id to credit
     the balance.
 
-    The optional operator_id parameter lets you fund a specific operator's
-    ledger when your Horizon session identity differs from the target npub.
-    This is common: Horizon OAuth is access control, npubs are economic
-    identity, and the two are orthogonal.
-
     Do NOT call this if you already have a pending unpaid invoice — pay the
     existing one first, or let it expire.
 
@@ -1053,17 +1047,17 @@ async def purchase_credits(
         amount_sats: The amount requested.
         funded_operator: The npub whose ledger will be credited.
 
-    Next step: Pay the invoice, then call check_payment(invoice_id, operator_id).
+    Next step: Pay the invoice, then call check_payment(invoice_id, npub).
 
     Errors: Fails if not registered (call register_operator first) or if
     BTCPay is unreachable.
     """
     try:
-        target_npub = _resolve_npub(operator_id.strip()) if operator_id.strip() else None
+        target_npub = _resolve_npub(npub.strip()) if npub.strip() else None
     except ValueError:
         target_npub = None
     if not target_npub:
-        return {"success": False, "error": "operator_id (npub) is required for purchase_credits."}
+        return {"success": False, "error": "npub is required for purchase_credits."}
 
     btcpay = _get_btcpay()
     cache = _get_ledger_cache()
@@ -1089,13 +1083,13 @@ async def check_payment(
             ),
         ),
     ],
-    operator_id: Annotated[
+    npub: Annotated[
         str,
         Field(
             default="",
             description=(
                 "The operator npub whose ledger should be credited. "
-                "Must match the operator_id used in the purchase_credits call "
+                "Must match the npub used in the purchase_credits call "
                 "that created this invoice."
             ),
         ),
@@ -1107,8 +1101,8 @@ async def check_payment(
     multiple times — credits are only granted once per invoice. If the invoice
     hasn't settled yet, returns the current status without crediting.
 
-    If you passed operator_id to purchase_credits, pass the same operator_id
-    here so the credits land in the correct ledger.
+    Pass the same npub used in purchase_credits so the credits land in the
+    correct ledger.
 
     Returns:
         success: True if balance was credited (or already was).
@@ -1121,11 +1115,11 @@ async def check_payment(
     Errors: Returns success=False if the invoice_id is invalid or expired.
     """
     try:
-        target_npub = _resolve_npub(operator_id.strip()) if operator_id.strip() else None
+        target_npub = _resolve_npub(npub.strip()) if npub.strip() else None
     except ValueError:
         target_npub = None
     if not target_npub:
-        return {"success": False, "error": "operator_id (npub) is required for check_payment."}
+        return {"success": False, "error": "npub is required for check_payment."}
 
     btcpay = _get_btcpay()
     cache = _get_ledger_cache()
@@ -1187,7 +1181,7 @@ async def operator_status(npub: Annotated[str, Field(description="Nostr public k
     registration and current balance.
 
     Returns:
-        operator_id: Your DPYC npub.
+        npub: Your DPYC npub.
         registered: Always True if the call succeeds.
         balance_sats: Current tax balance.
         total_deposited_sats: Lifetime credits purchased.
@@ -1210,7 +1204,7 @@ async def operator_status(npub: Annotated[str, Field(description="Nostr public k
     ledger = await cache.get(user_id)
 
     result: dict[str, Any] = {
-        "operator_id": user_id,
+        "npub": user_id,
         "dpyc_npub": user_id,
         "registered": True,
         "balance_sats": ledger.balance_api_sats,
@@ -1262,7 +1256,7 @@ async def service_status() -> dict[str, Any]:
 
 @tool
 async def certify_credits(
-    operator_id: Annotated[
+    npub: Annotated[
         str,
         Field(
             description=(
@@ -1325,21 +1319,21 @@ async def certify_credits(
     net_sats = amount_sats - fee_sats
 
     # Debit operator balance
-    ledger = await cache.get(operator_id)
+    ledger = await cache.get(npub)
     if not ledger.debit("certify_credits", fee_sats):
         return {
             "success": False,
             "error": f"Insufficient credit balance. Need {fee_sats} sats, have {ledger.balance_api_sats}.",
         }
 
-    cache.mark_dirty(operator_id)
+    cache.mark_dirty(npub)
 
     # DPYC registry membership check (fail closed) — before upstream certify
     # to avoid wasting upstream cert-sats if the registry check fails.
     registry = _get_dpyc_registry()
     if registry is not None:
         try:
-            await registry.check_membership(operator_id)
+            await registry.check_membership(npub)
         except RegistryError as e:
             ledger.rollback_debit("certify_credits", fee_sats)
             return {"success": False, "error": f"DPYC membership check failed: {e}"}
@@ -1364,7 +1358,7 @@ async def certify_credits(
     expiration = int(time.time()) + s.certificate_ttl_seconds
 
     claims = {
-        "sub": operator_id,
+        "sub": npub,
         "amount_sats": amount_sats,
         "fee_sats": fee_sats,
         "net_sats": net_sats,
@@ -1377,13 +1371,13 @@ async def certify_credits(
     nostr_event_json = nostr_signer.sign_certificate_event(
         claims=claims,
         jti=jti,
-        operator_npub=operator_id,
+        operator_npub=npub,
         expiration=expiration,
     )
 
     # Flush immediately (credit-critical)
-    if not await cache.flush_user(operator_id):
-        logger.error("Failed to persist fee debit for %s", operator_id)
+    if not await cache.flush_user(npub):
+        logger.error("Failed to persist fee debit for %s", npub)
 
     result = {
         "success": True,
