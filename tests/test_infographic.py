@@ -5,7 +5,21 @@ from __future__ import annotations
 import re
 
 
-from tollbooth_authority.infographic import render_operator_infographic
+from tollbooth.infographic import (
+    render_account_infographic,
+    THEME_AUTHORITY,
+    AUTHORITY_METRICS,
+    AUTHORITY_SECTIONS,
+)
+
+
+def render_operator_infographic(data):
+    return render_account_infographic(
+        data,
+        theme=THEME_AUTHORITY.with_name("Tollbooth Authority"),
+        sections=AUTHORITY_SECTIONS,
+        metrics=AUTHORITY_METRICS,
+    )
 
 
 # ---------------------------------------------------------------------------

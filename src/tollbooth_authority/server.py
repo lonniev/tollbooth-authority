@@ -1826,13 +1826,23 @@ async def account_statement_infographic(npub: Annotated[str, Field(description="
     Returns the same data as account_statement, plus an SVG rendering
     suitable for display in an AI chat or dashboard.
     """
-    from tollbooth_authority.infographic import render_operator_infographic
+    from tollbooth.infographic import (
+        render_account_infographic,
+        THEME_AUTHORITY,
+        AUTHORITY_METRICS,
+        AUTHORITY_SECTIONS,
+    )
 
     data = await account_statement(npub=npub)
     if not data.get("success"):
         return data
 
-    svg = render_operator_infographic(data)
+    svg = render_account_infographic(
+        data,
+        theme=THEME_AUTHORITY.with_name("Tollbooth Authority"),
+        sections=AUTHORITY_SECTIONS,
+        metrics=AUTHORITY_METRICS,
+    )
     return {
         "success": True,
         "svg": svg,
