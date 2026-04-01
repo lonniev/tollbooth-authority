@@ -232,7 +232,7 @@ async def test_register_operator():
         result = await srv.register_operator(npub=SAMPLE_NPUB)
 
     assert result["success"] is True
-    assert result["operator_id"] == SAMPLE_NPUB
+    assert result["npub"] == SAMPLE_NPUB
     assert result["dpyc_npub"] == SAMPLE_NPUB
     cache.get.assert_called_once_with(SAMPLE_NPUB)
     cache.mark_dirty.assert_called_once_with(SAMPLE_NPUB)
@@ -263,7 +263,7 @@ async def test_operator_status():
     ):
         result = await srv.operator_status(npub=SAMPLE_NPUB)
 
-    assert result["operator_id"] == SAMPLE_NPUB
+    assert result["npub"] == SAMPLE_NPUB
     assert result["dpyc_npub"] == SAMPLE_NPUB
     assert result["registered"] is True
     assert result["balance_sats"] == 500
@@ -531,7 +531,7 @@ async def test_register_operator_provisions_npub():
         result = await srv.register_operator(npub=SAMPLE_NPUB)
 
     assert result["success"] is True
-    assert result["operator_id"] == SAMPLE_NPUB
+    assert result["npub"] == SAMPLE_NPUB
     cache.get.assert_called_once_with(SAMPLE_NPUB)
 
 
@@ -552,7 +552,7 @@ async def test_register_operator_uses_npub_for_ledger():
     ):
         result = await srv.register_operator(npub=SAMPLE_NPUB)
 
-    assert result["operator_id"] == SAMPLE_NPUB
+    assert result["npub"] == SAMPLE_NPUB
     assert result["balance_sats"] == 42
     cache.get.assert_called_once_with(SAMPLE_NPUB)
     cache.mark_dirty.assert_called_once_with(SAMPLE_NPUB)
@@ -561,7 +561,7 @@ async def test_register_operator_uses_npub_for_ledger():
 
 @pytest.mark.asyncio
 async def test_purchase_credits_no_npub_returns_error():
-    """purchase_credits without operator_id returns helpful error."""
+    """purchase_credits without npub returns helpful error."""
     import tollbooth_authority.server as srv
 
     result = await srv.purchase_credits(1000)
