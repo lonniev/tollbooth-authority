@@ -348,7 +348,7 @@ class _DefaultPricingResolver:
 
 
 async def _get_authority_npub() -> str | None:
-    """Read the curator npub: NeonVault → env var → None."""
+    """Read the curator npub from NeonVault config. No env var fallback."""
     global _cached_authority_npub
     if _cached_authority_npub is not None:
         return _cached_authority_npub
@@ -361,11 +361,7 @@ async def _get_authority_npub() -> str | None:
                 return npub
         except Exception:
             pass
-    import os
-    npub = os.environ.get("DPYC_AUTHORITY_NPUB")
-    if npub:
-        _cached_authority_npub = npub
-    return npub
+    return None
 
 
 async def _set_authority_npub(npub: str) -> None:
