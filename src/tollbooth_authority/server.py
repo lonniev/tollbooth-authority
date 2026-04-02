@@ -36,6 +36,7 @@ from tollbooth_authority.onboarding import (
     ONBOARDING_TEMPLATES,
 )
 from tollbooth_authority.registry import DEFAULT_REGISTRY_URL, DPYCRegistry, RegistryError
+from tollbooth.nostr_diagnostics import resolve_relays as _resolve_relays
 from tollbooth_authority.replay import ReplayTracker
 
 logger = logging.getLogger(__name__)
@@ -148,8 +149,6 @@ _replay_tracker: ReplayTracker | None = None
 
 
 _nostr_signer: AuthorityNostrSigner | None = None
-
-from tollbooth.nostr_diagnostics import resolve_relays as _resolve_relays
 
 
 def _get_nostr_signer() -> AuthorityNostrSigner:
