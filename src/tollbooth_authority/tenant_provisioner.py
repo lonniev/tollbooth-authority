@@ -32,12 +32,13 @@ def schema_name_for_npub(npub: str) -> str:
 def neon_url_with_schema(base_url: str, schema: str) -> str:
     """Append search_path option to a Neon connection URL.
 
-    The operator connects with this URL and only sees tables in their
-    schema — no access to the Authority's tables or other operators.
+    The operator connects with this URL and sees tables in their schema
+    first, falling back to ``public`` for shared tables (e.g. ``balances``
+    created before per-schema isolation was added).
     """
     parsed = urlparse(base_url)
     params = parse_qs(parsed.query)
-    params["options"] = [f"-c search_path={schema}"]
+    params["options"] = [f"-c search_path={schema},public"]
     new_query = urlencode(params, doseq=True)
     return urlunparse(parsed._replace(query=new_query))
 
