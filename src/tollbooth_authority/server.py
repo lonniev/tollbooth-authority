@@ -1127,15 +1127,19 @@ async def check_payment(
 
 @tool
 async def check_balance(npub: Annotated[str, Field(description="Nostr public key (npub1...). Defaults to operator identity if empty.")] = "") -> dict[str, Any]:
-    """Check your current operator credit balance, total deposited, total consumed, and pending invoices.
+    """Check an operator's tax balance at the Authority.
 
-    Read-only — no side effects. Call anytime to check your funding level
-    before certifying, or to monitor usage.
+    This is the operator's certification account — the balance used to
+    pay the 2% fee when certifying patron credit purchases. When this
+    balance reaches zero, patron top-ups cannot be certified.
+
+    This is NOT a patron's spending balance — for that, use check_balance
+    on the operator's own MCP.
 
     Returns:
-        balance_sats: Current available credit balance.
-        total_deposited_sats: Lifetime credits purchased.
-        total_consumed_sats: Lifetime fees deducted via certify_credits.
+        balance_sats: Current available certification credit balance.
+        total_deposited_sats: Lifetime credits purchased at the Authority.
+        total_consumed_sats: Lifetime certification fees deducted.
         pending_invoices: Number of unpaid invoices.
 
     Next step: If balance is low, call purchase_credits to top up.
