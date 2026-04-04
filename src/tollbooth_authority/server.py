@@ -315,35 +315,14 @@ async def _get_pricing_resolver() -> Any:
     if _pricing_resolver is not None:
         return _pricing_resolver
     from tollbooth.pricing_resolver import PricingResolver
-    from tollbooth_authority.default_pricing import build_default_model
 
-    try:
-        store = _get_pricing_store()
-        nostr_signer = _get_nostr_signer()
-        _pricing_resolver = PricingResolver(
-            store=store,
-            operator=nostr_signer.npub,
-        )
-    except RuntimeError:
-        # No Neon — use default pricing model directly
-        default = build_default_model()
-        _pricing_resolver = _DefaultPricingResolver(default)
+    store = _get_pricing_store()
+    nostr_signer = _get_nostr_signer()
+    _pricing_resolver = PricingResolver(
+        store=store,
+        operator=nostr_signer.npub,
+    )
     return _pricing_resolver
-
-
-class _DefaultPricingResolver:
-    """Minimal resolver backed by the default pricing model (no Neon)."""
-
-    def __init__(self, model: Any) -> None:
-        self._model = model
-
-    async def get_tool_pricing(self, tool_name: str) -> Any:
-        from tollbooth.pricing import ToolPricing
-
-        for tp in self._model.tools:
-            if tp.tool_name == tool_name:
-                return tp.to_tool_pricing()
-        return ToolPricing()
 
 
 async def _get_authority_npub() -> str | None:
@@ -1858,9 +1837,9 @@ async def account_statement_infographic(npub: Annotated[str, Field(description="
 async def get_pricing_model() -> dict[str, Any]:
     """Get the active pricing model for this Authority. Free.
 
-    Returns the stored model if one exists, otherwise the built-in
-    default pricing (all free except certify_credits ad valorem 2%,
-    account_statement_infographic 1 sat).
+    Returns the stored pricing model from Neon. The wheel's
+    register_standard_tools handles self-initialization if no model
+    exists yet.
     """
     try:
         store = _get_pricing_store()
@@ -1869,20 +1848,7 @@ async def get_pricing_model() -> dict[str, Any]:
         return {"status": "error", "error": str(e)}
     from tollbooth.tools.pricing import get_pricing_model_tool
 
-    result = await get_pricing_model_tool(store, operator)
-
-    # If no stored model, return the built-in default
-    if result.get("status") == "ok" and result.get("tools") is None:
-        from tollbooth_authority.default_pricing import build_default_model
-        from tollbooth.tools.pricing import _model_to_response
-
-        default = build_default_model()
-        default.operator = operator
-        resp = _model_to_response(default)
-        resp["source"] = "default"
-        return resp
-
-    return result
+    return await get_pricing_model_tool(store, operator)
 
 
 @tool
