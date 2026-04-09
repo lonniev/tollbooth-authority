@@ -225,10 +225,7 @@ async def test_register_operator():
     cache.mark_dirty = MagicMock()
     cache.flush_user = AsyncMock(return_value=True)
 
-    with (
-        patch.object(srv, "_require_user_id", return_value="op-1"),
-        patch.object(srv, "_get_ledger_cache", return_value=cache),
-    ):
+    with patch.object(srv, "_get_ledger_cache", return_value=cache):
         result = await srv.register_operator(npub=SAMPLE_NPUB)
 
     assert result["success"] is True
@@ -505,8 +502,7 @@ async def test_register_operator_invalid_npub():
     """register_operator rejects invalid npub format."""
     import tollbooth_authority.server as srv
 
-    with patch.object(srv, "_require_user_id", return_value="horizon-1"):
-        result = await srv.register_operator(npub="not-an-npub")
+    result = await srv.register_operator(npub="not-an-npub")
 
     assert result["success"] is False
     assert "Invalid npub" in result["error"]
@@ -524,10 +520,7 @@ async def test_register_operator_provisions_npub():
     cache.mark_dirty = MagicMock()
     cache.flush_user = AsyncMock(return_value=True)
 
-    with (
-        patch.object(srv, "_require_user_id", return_value="horizon-1"),
-        patch.object(srv, "_get_ledger_cache", return_value=cache),
-    ):
+    with patch.object(srv, "_get_ledger_cache", return_value=cache):
         result = await srv.register_operator(npub=SAMPLE_NPUB)
 
     assert result["success"] is True
@@ -546,10 +539,7 @@ async def test_register_operator_uses_npub_for_ledger():
     cache.mark_dirty = MagicMock()
     cache.flush_user = AsyncMock(return_value=True)
 
-    with (
-        patch.object(srv, "_require_user_id", return_value="horizon-1"),
-        patch.object(srv, "_get_ledger_cache", return_value=cache),
-    ):
+    with patch.object(srv, "_get_ledger_cache", return_value=cache):
         result = await srv.register_operator(npub=SAMPLE_NPUB)
 
     assert result["npub"] == SAMPLE_NPUB

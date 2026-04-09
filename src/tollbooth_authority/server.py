@@ -16,7 +16,6 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from fastmcp import FastMCP
-from fastmcp.server.dependencies import get_http_headers
 
 from tollbooth import BTCPayClient, LedgerCache
 from tollbooth.slug_tools import make_slug_tool
@@ -561,30 +560,13 @@ async def _deregister_operator_via_oracle(
 # ---------------------------------------------------------------------------
 
 
-def _get_current_user_id() -> str | None:
-    try:
-        headers = get_http_headers(include_all=True)
-        return headers.get("fastmcp-cloud-user")
-    except Exception:
-        return None
-
-
-def _require_user_id() -> str:
-    user_id = _get_current_user_id()
-    if not user_id:
-        raise ValueError(
-            "Cannot identify user. This tool requires FastMCP Cloud authentication."
-        )
-    return user_id
-
-
 # ---------------------------------------------------------------------------
 # DPYC identity (npub-primary: npub is the sole credit identity)
 # ---------------------------------------------------------------------------
 #
 # The npub is the SOLE identity for all ledger/credit operations.
-# Horizon OAuth is the transport auth layer (gates access to the MCP)
-# but DOES NOT determine which npub is acting.
+# Access control is via Nostr keypair proof (kind-27235 Schnorr signatures),
+# not transport-layer tokens.
 #
 _dpyc_registry: DPYCRegistry | None = None
 
@@ -738,21 +720,20 @@ async def register_operator(
         ),
     ] = "",
 ) -> dict[str, Any]:
-    """Provision an operator in the Authority ledger via Horizon OAuth identity.
+    """Provision an operator in the Authority ledger.
 
     This is the **Authority-side** handler for operator registration.
     In the full DPYC flow, a requester sends a Nostr DM delegation
     request to this Authority's npub; the Authority then calls this tool
-    to provision the new Operator.  Currently implemented as a direct
-    MCP tool call (Horizon OAuth), pending the DM-based approval workflow.
+    to provision the new Operator.
 
     Not to be confused with **citizen** registration, which the Operator
     handles directly via the Oracle's request_citizenship /
     confirm_citizenship flow — no Authority involvement.
 
-    Creates a ledger entry for the authenticated operator so they can
-    purchase credits and certify purchase orders. Idempotent — safe
-    to call again if already registered (returns current balance).
+    Creates a ledger entry for the operator so they can purchase credits
+    and certify purchase orders. Idempotent — safe to call again if
+    already registered (returns current balance).
 
     Your DPYC npub (Nostr public key) is required — it serves as your
     persistent identity for all ledger and credit operations. Obtain one from
@@ -765,9 +746,6 @@ async def register_operator(
         message: Human-readable confirmation.
 
     Next step: Call purchase_credits to fund your credit balance.
-
-    Errors: Fails if not authenticated via Horizon (FastMCP Cloud required)
-    or if npub is invalid.
     """
     if not npub.startswith("npub1") or len(npub) < 60:
         return {
@@ -948,8 +926,7 @@ async def get_operator_config(
         if not verify_operator_proof(operator_proof, npub, "get_operator_config"):
             return {"success": False, "error": "Invalid operator proof — signature does not match npub."}
     else:
-        # No operator proof — require Horizon OAuth identity match
-        return {"success": False, "error": "operator_proof is required when not providing a Schnorr signature."}
+        return {"success": False, "error": "operator_proof is required — sign a kind-27235 event with your nsec."}
 
     config_vault = _get_config_vault()
     if not config_vault:
@@ -998,8 +975,8 @@ async def purchase_credits(
             default="",
             description=(
                 "The operator npub whose ledger should receive the credits. "
-                "Use this when the Horizon OAuth session identity differs from the "
-                "operator's DPYC npub (e.g. funding a service's NSEC-derived npub)."
+                "Use this to fund a different operator's balance "
+                "(e.g. a service's NSEC-derived npub)."
             ),
         ),
     ] = "",
@@ -1880,15 +1857,13 @@ async def set_pricing_model(model_json: str) -> dict[str, Any]:
     except (ValueError, RuntimeError) as e:
         return {"status": "error", "error": str(e)}
 
-    # Verify caller is the operator (skip in STDIO mode)
-    user_id = _get_current_user_id()
-    if user_id is not None:
-        if not operator_proof:
-            return {"status": "error", "error": "Only the operator can modify pricing — provide operator_proof."}
-        from tollbooth.operator_proof import verify_operator_proof
+    # Verify caller is the operator — always required
+    if not operator_proof:
+        return {"status": "error", "error": "Only the operator can modify pricing — provide operator_proof."}
+    from tollbooth.operator_proof import verify_operator_proof
 
-        if not verify_operator_proof(operator_proof, operator, "set_pricing_model"):
-            return {"status": "error", "error": "Only the operator can modify pricing"}
+    if not verify_operator_proof(operator_proof, operator, "set_pricing_model"):
+        return {"status": "error", "error": "Invalid operator_proof — only the operator can modify pricing."}
 
     from tollbooth.tools.pricing import set_pricing_model_tool
 
