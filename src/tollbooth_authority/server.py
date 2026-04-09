@@ -426,7 +426,7 @@ async def _register_via_oracle(
 
     from fastmcp import Client
 
-    async with Client(oracle_url, auth="oauth") as client:
+    async with Client(oracle_url) as client:
         result = await client.call_tool(
             "register_authority",
             {
@@ -466,7 +466,7 @@ async def _register_operator_via_oracle(
 
     from fastmcp import Client
 
-    async with Client(oracle_url, auth="oauth") as client:
+    async with Client(oracle_url) as client:
         result = await client.call_tool(
             "register_operator",
             {
@@ -509,7 +509,7 @@ async def _update_operator_via_oracle(
     if display_name:
         args["display_name"] = display_name
 
-    async with Client(oracle_url, auth="oauth") as client:
+    async with Client(oracle_url) as client:
         result = await client.call_tool("update_operator", args)
         if hasattr(result, "content"):
             for block in result.content:
@@ -536,7 +536,7 @@ async def _deregister_operator_via_oracle(
 
     from fastmcp import Client
 
-    async with Client(oracle_url, auth="oauth") as client:
+    async with Client(oracle_url) as client:
         result = await client.call_tool(
             "deregister_operator",
             {
