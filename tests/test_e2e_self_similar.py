@@ -201,35 +201,8 @@ class TestSelfSimilarCommerceChain:
         assert claims["fee_sats"] == result["fee_sats"]
         assert claims["net_sats"] == result["net_sats"]
 
-    @pytest.mark.asyncio
-    async def test_non_prime_upstream_auto_certify(self):
-        """Non-Prime path: upstream AuthorityCertifier is called; failure raises."""
-        import tollbooth_authority.server as srv
-        from tollbooth.authority_client import AuthorityCertifyError
-
-        nostr_signer = _make_nostr_signer()
-        settings = _make_settings()
-        settings.upstream_authority_address = "https://upstream.example.com"
-        cache = MagicMock(spec=LedgerCache)
-        cache.flush_user = AsyncMock(return_value=True)
-        replay = ReplayTracker(ttl_seconds=600)
-
-        with (
-            patch.object(srv, "_get_settings", return_value=settings),
-            patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
-            patch.object(srv, "_get_replay_tracker", return_value=replay),
-            patch.object(srv.runtime, "pricing_resolver", new_callable=AsyncMock, return_value=_mock_pricing_resolver()),
-            patch.object(srv.runtime, "ledger_cache", new_callable=AsyncMock, return_value=cache),
-            patch.object(srv, "_get_authority_npub", new_callable=AsyncMock, return_value=nostr_signer.npub),
-            patch("tollbooth.authority_client.AuthorityCertifier") as MockCertifierClass,
-        ):
-            MockCertifierClass.return_value.certify_credits = AsyncMock(
-                side_effect=AuthorityCertifyError("insufficient balance")
-            )
-            # certify_credits now raises RuntimeError on upstream failure
-            # (paid_tool wrapper catches and rolls back)
-            with pytest.raises(RuntimeError, match="Upstream certification failed"):
-                await _call_certify_credits("op-1", 1000)
+    # test_non_prime_upstream_auto_certify removed — upstream certification
+    # is now elastic (tranche-based top-offs), not per-transaction.
 
     @pytest.mark.asyncio
     async def test_anti_replay_jti(self):

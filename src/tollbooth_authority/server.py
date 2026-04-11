@@ -741,20 +741,6 @@ async def certify_credits(
         except RegistryError as e:
             raise RuntimeError(f"DPYC membership check failed: {e}")
 
-    # Non-Prime: certify upstream in real-time
-    upstream_cert = None
-    if s.upstream_authority_address:
-        from tollbooth.authority_client import AuthorityCertifier, AuthorityCertifyError
-
-        authority_npub = await _get_authority_npub()
-        if not authority_npub:
-            authority_npub = nostr_signer.npub
-        certifier = AuthorityCertifier(s.upstream_authority_address, authority_npub)
-        try:
-            upstream_cert = await certifier.certify_credits(amount_sats)
-        except AuthorityCertifyError as e:
-            raise RuntimeError(f"Upstream certification failed: {e}")
-
     # Build claims and sign certificate
     jti = uuid.uuid4().hex
     expiration = int(time.time()) + s.certificate_ttl_seconds
@@ -781,7 +767,7 @@ async def certify_credits(
     if not await cache.flush_user(npub):
         logger.error("Failed to persist fee debit for %s", npub)
 
-    result: dict[str, Any] = {
+    return {
         "success": True,
         "certificate": nostr_event_json,
         "jti": jti,
@@ -790,12 +776,6 @@ async def certify_credits(
         "net_sats": net_sats,
         "expires_at": expiration,
     }
-
-    if upstream_cert is not None:
-        result["upstream_certificate"] = upstream_cert.get("certificate")
-        result["upstream_jti"] = upstream_cert.get("jti")
-
-    return result
 
 
 # ======================================================================
