@@ -181,6 +181,23 @@ register_standard_tools(
     service_version=__version__,
 )
 
+
+# Override check_balance to fall back to operator npub when empty.
+# The Authority's "patrons" are operators who may omit npub.
+@tool
+async def check_balance(
+    npub: Annotated[str, Field(description="Nostr public key (npub1...). Defaults to operator identity if empty.")] = "",
+) -> dict[str, Any]:
+    """Check an operator's credit balance at the Authority."""
+    try:
+        user_id = resolve_npub(npub)
+    except ValueError:
+        user_id = runtime.operator_npub()
+    cache = await runtime.ledger_cache()
+    from tollbooth.tools.credits import check_balance_tool
+    return await check_balance_tool(cache, user_id)
+
+
 # ======================================================================
 # Authority-specific state (domain logic, not protocol)
 # ======================================================================

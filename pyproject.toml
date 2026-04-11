@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tollbooth-authority"
-version = "0.5.1"
+version = "0.5.2"
 description = "Tollbooth Authority — Certified Purchase Order Service"
 readme = "README.md"
 license = "Apache-2.0"
