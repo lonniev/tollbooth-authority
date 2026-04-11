@@ -170,7 +170,7 @@ runtime = OperatorRuntime(
     tool_registry={**STANDARD_IDENTITIES, **TOOL_REGISTRY},
     purchase_mode="direct",  # Authority is trust root — no upstream cert
     service_name="Tollbooth Authority",
-    ots_enabled=False,
+    ots_enabled=True,
 )
 
 register_standard_tools(
