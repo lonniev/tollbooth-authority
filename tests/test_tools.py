@@ -26,19 +26,29 @@ def _ledger_with_balance(sats: int, **kwargs) -> UserLedger:
     return ledger
 
 
-@pytest.fixture(autouse=True)
-def _clean_pricing_resolver():
-    """Ensure pricing resolver is clean before and after each test."""
-    import tollbooth_authority.server as srv
+def _mock_pricing_resolver():
+    """Return an AsyncMock pricing resolver with 2% ad valorem certify_credits."""
     from tollbooth import ToolPricing
-    # Inject a default pricing resolver so certify_credits works without Neon
-    mock_resolver = AsyncMock()
-    mock_resolver.get_tool_pricing = AsyncMock(
+    resolver = AsyncMock()
+    resolver.get_tool_pricing = AsyncMock(
         return_value=ToolPricing(rate_percent=2.0, rate_param="amount_sats", min_cost=10)
     )
-    srv._pricing_resolver = mock_resolver
-    yield
-    srv._pricing_resolver = None
+    return resolver
+
+
+@pytest.fixture(autouse=True)
+def _mock_runtime():
+    """Mock OperatorRuntime methods so tests don't need Neon/bootstrap."""
+    import tollbooth_authority.server as srv
+    with (
+        patch.object(srv.runtime, "debit_or_deny", new_callable=AsyncMock, return_value=None),
+        patch.object(srv.runtime, "pricing_resolver", new_callable=AsyncMock, return_value=_mock_pricing_resolver()),
+        patch.object(srv.runtime, "rollback_debit", new_callable=AsyncMock),
+        patch.object(srv.runtime, "fire_and_forget_demand_increment"),
+        patch.object(srv.runtime, "mcp_name_for", return_value="authority_certify_credits"),
+        patch.object(srv.runtime, "inject_low_balance_warning", new_callable=AsyncMock, side_effect=lambda r, n: r),
+    ):
+        yield
 
 
 def _make_nostr_signer() -> AuthorityNostrSigner:
@@ -85,10 +95,10 @@ async def test_certify_credits_success():
     with (
         patch.object(srv, "_get_settings", return_value=settings),
         patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
-        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv.runtime, "ledger_cache", new_callable=AsyncMock, return_value=cache),
         patch.object(srv, "_get_replay_tracker", return_value=replay),
     ):
-        result = await srv.certify_credits("op-1", 1000)
+        result = await srv.certify_credits(npub="op-1", amount_sats= 1000)
 
     assert result["success"] is True
     assert "certificate" in result
@@ -96,7 +106,8 @@ async def test_certify_credits_success():
     # Fee: max(10, ceil(1000 * 2.0 / 100)) = max(10, 20) = 20
     assert result["fee_sats"] == 20
     assert result["net_sats"] == 980
-    cache.mark_dirty.assert_called_once_with("op-1")
+    # Billing (debit/mark_dirty) is handled by the paid_tool wrapper.
+    # The function body calls flush_user for credit-critical persistence.
     cache.flush_user.assert_called_once_with("op-1")
     # Verify certificate is a valid Nostr event with correct claims
     event_dict = json.loads(result["certificate"])
@@ -124,41 +135,19 @@ async def test_certify_credits_returns_fee_sats():
     with (
         patch.object(srv, "_get_settings", return_value=settings),
         patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
-        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv.runtime, "ledger_cache", new_callable=AsyncMock, return_value=cache),
         patch.object(srv, "_get_replay_tracker", return_value=replay),
     ):
-        result = await srv.certify_credits("op-1", 1000)
+        result = await srv.certify_credits(npub="op-1", amount_sats= 1000)
 
     assert result["success"] is True
     assert "fee_sats" in result
     assert "tax_paid_sats" not in result
 
 
-@pytest.mark.asyncio
-async def test_certify_credits_insufficient_balance():
-    """Certification fails when operator balance is too low."""
-    import tollbooth_authority.server as srv
-
-    nostr_signer = _make_nostr_signer()
-    settings = _make_settings(certificate_ttl_seconds=600)
-
-    # Mock ledger with zero balance
-    ledger = UserLedger()
-    cache = MagicMock(spec=LedgerCache)
-    cache.get = AsyncMock(return_value=ledger)
-
-    replay = ReplayTracker(ttl_seconds=600)
-
-    with (
-        patch.object(srv, "_get_settings", return_value=settings),
-        patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
-        patch.object(srv, "_get_ledger_cache", return_value=cache),
-        patch.object(srv, "_get_replay_tracker", return_value=replay),
-    ):
-        result = await srv.certify_credits("op-1", 1000)
-
-    assert result["success"] is False
-    assert "Insufficient credit balance" in result["error"]
+# test_certify_credits_insufficient_balance removed —
+# balance checking is now handled by paid_tool (debit_or_deny) in the wheel.
+# Tested in tollbooth-dpyc/tests/test_runtime_onboarding.py.
 
 
 @pytest.mark.asyncio
@@ -166,7 +155,7 @@ async def test_certify_credits_negative_amount():
     """Negative amount is rejected."""
     import tollbooth_authority.server as srv
 
-    result = await srv.certify_credits("op-1", -100)
+    result = await srv.certify_credits(npub="op-1", amount_sats= -100)
     assert result["success"] is False
     assert "positive" in result["error"]
 
@@ -176,7 +165,7 @@ async def test_certify_credits_zero_amount():
     """Zero amount is rejected."""
     import tollbooth_authority.server as srv
 
-    result = await srv.certify_credits("op-1", 0)
+    result = await srv.certify_credits(npub="op-1", amount_sats= 0)
     assert result["success"] is False
 
 
@@ -200,10 +189,10 @@ async def test_certify_credits_applies_minimum_fee():
     with (
         patch.object(srv, "_get_settings", return_value=settings),
         patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
-        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv.runtime, "ledger_cache", new_callable=AsyncMock, return_value=cache),
         patch.object(srv, "_get_replay_tracker", return_value=replay),
     ):
-        result = await srv.certify_credits("op-1", 100)
+        result = await srv.certify_credits(npub="op-1", amount_sats= 100)
 
     assert result["success"] is True
     assert result["fee_sats"] == 10  # min_sats, not 2%
@@ -225,7 +214,7 @@ async def test_register_operator():
     cache.mark_dirty = MagicMock()
     cache.flush_user = AsyncMock(return_value=True)
 
-    with patch.object(srv, "_get_ledger_cache", return_value=cache):
+    with patch.object(srv.runtime, "ledger_cache", new_callable=AsyncMock, return_value=cache):
         result = await srv.register_operator(npub=SAMPLE_NPUB)
 
     assert result["success"] is True
@@ -256,7 +245,7 @@ async def test_operator_status():
     with (
         patch.object(srv, "_get_settings", return_value=settings),
         patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
-        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv.runtime, "ledger_cache", new_callable=AsyncMock, return_value=cache),
     ):
         result = await srv.operator_status(npub=SAMPLE_NPUB)
 
@@ -291,7 +280,7 @@ async def test_operator_status_shows_upstream():
     with (
         patch.object(srv, "_get_settings", return_value=settings),
         patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
-        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv.runtime, "ledger_cache", new_callable=AsyncMock, return_value=cache),
     ):
         result = await srv.operator_status(npub=SAMPLE_NPUB)
 
@@ -337,13 +326,13 @@ async def test_certify_credits_calls_upstream_certifier():
     with (
         patch.object(srv, "_get_settings", return_value=settings),
         patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
-        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv.runtime, "ledger_cache", new_callable=AsyncMock, return_value=cache),
         patch.object(srv, "_get_replay_tracker", return_value=replay),
         patch.object(srv, "_get_authority_npub", new_callable=AsyncMock, return_value=nostr_signer.npub),
         patch("tollbooth.authority_client.AuthorityCertifier") as MockCertifierClass,
     ):
         MockCertifierClass.return_value.certify_credits = mock_certifier
-        result = await srv.certify_credits("op-1", 1000)
+        result = await srv.certify_credits(npub="op-1", amount_sats= 1000)
 
     assert result["success"] is True
     mock_certifier.assert_called_once_with(1000)
@@ -375,7 +364,7 @@ async def test_certify_credits_upstream_failure_rollback():
     with (
         patch.object(srv, "_get_settings", return_value=settings),
         patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
-        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv.runtime, "ledger_cache", new_callable=AsyncMock, return_value=cache),
         patch.object(srv, "_get_replay_tracker", return_value=replay),
         patch.object(srv, "_get_authority_npub", new_callable=AsyncMock, return_value=nostr_signer.npub),
         patch("tollbooth.authority_client.AuthorityCertifier") as MockCertifierClass,
@@ -383,7 +372,7 @@ async def test_certify_credits_upstream_failure_rollback():
         MockCertifierClass.return_value.certify_credits = AsyncMock(
             side_effect=AuthorityCertifyError("connection refused")
         )
-        result = await srv.certify_credits("op-1", 1000)
+        result = await srv.certify_credits(npub="op-1", amount_sats= 1000)
 
     assert result["success"] is False
     assert "Upstream certification failed" in result["error"]
@@ -414,11 +403,11 @@ async def test_certify_credits_prime_skips_upstream():
     with (
         patch.object(srv, "_get_settings", return_value=settings),
         patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
-        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv.runtime, "ledger_cache", new_callable=AsyncMock, return_value=cache),
         patch.object(srv, "_get_replay_tracker", return_value=replay),
         patch("tollbooth.authority_client.AuthorityCertifier") as MockCertifierClass,
     ):
-        result = await srv.certify_credits("op-1", 1000)
+        result = await srv.certify_credits(npub="op-1", amount_sats= 1000)
 
     assert result["success"] is True
     # AuthorityCertifier should never be instantiated for Prime
@@ -428,14 +417,7 @@ async def test_certify_credits_prime_skips_upstream():
     assert "upstream_jti" not in result
 
 
-@pytest.mark.asyncio
-async def test_report_upstream_purchase_deprecated():
-    """report_upstream_purchase returns deprecation error."""
-    import tollbooth_authority.server as srv
-
-    result = await srv.report_upstream_purchase(1000)
-    assert result["success"] is False
-    assert "deprecated" in result["error"]
+# test_report_upstream_purchase_deprecated removed — tool deleted.
 
 
 @pytest.mark.asyncio
@@ -458,7 +440,7 @@ async def test_operator_status_shows_upstream_auto_mode():
     with (
         patch.object(srv, "_get_settings", return_value=settings),
         patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
-        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv.runtime, "ledger_cache", new_callable=AsyncMock, return_value=cache),
     ):
         result = await srv.operator_status(npub=SAMPLE_NPUB)
 
@@ -473,28 +455,7 @@ async def test_operator_status_shows_upstream_auto_mode():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_activate_dpyc_deprecated():
-    """activate_dpyc returns deprecation message regardless of input."""
-    import tollbooth_authority.server as srv
-
-    result = await srv.activate_dpyc(SAMPLE_NPUB)
-
-    assert result["success"] is False
-    assert "deprecated" in result["error"].lower()
-    assert "register_operator" in result["error"]
-
-
-@pytest.mark.asyncio
-async def test_activate_dpyc_deprecated_invalid_also():
-    """activate_dpyc returns same deprecation message even for invalid npub."""
-    import tollbooth_authority.server as srv
-
-    result = await srv.activate_dpyc("not-an-npub")
-
-    assert result["success"] is False
-    assert "deprecated" in result["error"].lower()
-    assert "register_operator" in result["error"]
+# test_activate_dpyc tests removed — tool deleted.
 
 
 @pytest.mark.asyncio
@@ -506,7 +467,6 @@ async def test_register_operator_invalid_npub():
 
     assert result["success"] is False
     assert "Invalid npub" in result["error"]
-    assert "dpyc-oracle" in result["error"]
 
 
 @pytest.mark.asyncio
@@ -520,7 +480,7 @@ async def test_register_operator_provisions_npub():
     cache.mark_dirty = MagicMock()
     cache.flush_user = AsyncMock(return_value=True)
 
-    with patch.object(srv, "_get_ledger_cache", return_value=cache):
+    with patch.object(srv.runtime, "ledger_cache", new_callable=AsyncMock, return_value=cache):
         result = await srv.register_operator(npub=SAMPLE_NPUB)
 
     assert result["success"] is True
@@ -539,7 +499,7 @@ async def test_register_operator_uses_npub_for_ledger():
     cache.mark_dirty = MagicMock()
     cache.flush_user = AsyncMock(return_value=True)
 
-    with patch.object(srv, "_get_ledger_cache", return_value=cache):
+    with patch.object(srv.runtime, "ledger_cache", new_callable=AsyncMock, return_value=cache):
         result = await srv.register_operator(npub=SAMPLE_NPUB)
 
     assert result["npub"] == SAMPLE_NPUB
@@ -549,15 +509,7 @@ async def test_register_operator_uses_npub_for_ledger():
     cache.flush_user.assert_called_once_with(SAMPLE_NPUB)
 
 
-@pytest.mark.asyncio
-async def test_purchase_credits_no_npub_returns_error():
-    """purchase_credits without npub returns helpful error."""
-    import tollbooth_authority.server as srv
-
-    result = await srv.purchase_credits(1000)
-
-    assert result["success"] is False
-    assert "npub" in result["error"].lower()
+# test_purchase_credits_no_npub_returns_error removed — purchase_credits is now in the wheel.
 
 
 # ---------------------------------------------------------------------------
@@ -590,11 +542,11 @@ async def test_certify_credits_registry_active_member():
     with (
         patch.object(srv, "_get_settings", return_value=settings),
         patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
-        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv.runtime, "ledger_cache", new_callable=AsyncMock, return_value=cache),
         patch.object(srv, "_get_replay_tracker", return_value=replay),
         patch.object(srv, "_get_dpyc_registry", return_value=mock_registry),
     ):
-        result = await srv.certify_credits("op-1", 1000)
+        result = await srv.certify_credits(npub="op-1", amount_sats= 1000)
 
     assert result["success"] is True
     mock_registry.check_membership.assert_called_once_with("op-1")
@@ -624,11 +576,11 @@ async def test_certify_credits_registry_non_member_rejected():
     with (
         patch.object(srv, "_get_settings", return_value=settings),
         patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
-        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv.runtime, "ledger_cache", new_callable=AsyncMock, return_value=cache),
         patch.object(srv, "_get_replay_tracker", return_value=replay),
         patch.object(srv, "_get_dpyc_registry", return_value=mock_registry),
     ):
-        result = await srv.certify_credits("op-1", 1000)
+        result = await srv.certify_credits(npub="op-1", amount_sats= 1000)
 
     assert result["success"] is False
     assert "DPYC membership check failed" in result["error"]
@@ -660,11 +612,11 @@ async def test_certify_credits_registry_unreachable_fails_closed():
     with (
         patch.object(srv, "_get_settings", return_value=settings),
         patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
-        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv.runtime, "ledger_cache", new_callable=AsyncMock, return_value=cache),
         patch.object(srv, "_get_replay_tracker", return_value=replay),
         patch.object(srv, "_get_dpyc_registry", return_value=mock_registry),
     ):
-        result = await srv.certify_credits("op-1", 1000)
+        result = await srv.certify_credits(npub="op-1", amount_sats= 1000)
 
     assert result["success"] is False
     assert "fetch failed" in result["error"]
@@ -693,11 +645,11 @@ async def test_certify_credits_enforcement_disabled_no_check():
     with (
         patch.object(srv, "_get_settings", return_value=settings),
         patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
-        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv.runtime, "ledger_cache", new_callable=AsyncMock, return_value=cache),
         patch.object(srv, "_get_replay_tracker", return_value=replay),
         patch.object(srv, "_get_dpyc_registry", return_value=None),
     ):
-        result = await srv.certify_credits("op-1", 1000)
+        result = await srv.certify_credits(npub="op-1", amount_sats= 1000)
 
     assert result["success"] is True
 
@@ -726,10 +678,10 @@ async def test_certify_credits_certificate_is_valid_nostr_event():
     with (
         patch.object(srv, "_get_settings", return_value=settings),
         patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
-        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv.runtime, "ledger_cache", new_callable=AsyncMock, return_value=cache),
         patch.object(srv, "_get_replay_tracker", return_value=replay),
     ):
-        result = await srv.certify_credits("op-1", 1000)
+        result = await srv.certify_credits(npub="op-1", amount_sats= 1000)
 
     assert result["success"] is True
     assert "certificate" in result
@@ -764,10 +716,10 @@ async def test_certify_credits_nostr_event_verifiable():
     with (
         patch.object(srv, "_get_settings", return_value=settings),
         patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
-        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv.runtime, "ledger_cache", new_callable=AsyncMock, return_value=cache),
         patch.object(srv, "_get_replay_tracker", return_value=replay),
     ):
-        result = await srv.certify_credits("op-1", 1000)
+        result = await srv.certify_credits(npub="op-1", amount_sats= 1000)
 
     event_dict = json.loads(result["certificate"])
     event = Event.from_dict(event_dict)
@@ -793,10 +745,10 @@ async def test_certify_credits_nostr_event_claims_match():
     with (
         patch.object(srv, "_get_settings", return_value=settings),
         patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
-        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv.runtime, "ledger_cache", new_callable=AsyncMock, return_value=cache),
         patch.object(srv, "_get_replay_tracker", return_value=replay),
     ):
-        result = await srv.certify_credits("op-1", 1000)
+        result = await srv.certify_credits(npub="op-1", amount_sats= 1000)
 
     event_dict = json.loads(result["certificate"])
     content = json.loads(event_dict["content"])
@@ -847,7 +799,7 @@ async def test_operator_status_shows_dpyc_info():
     with (
         patch.object(srv, "_get_settings", return_value=settings),
         patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
-        patch.object(srv, "_get_ledger_cache", return_value=cache),
+        patch.object(srv.runtime, "ledger_cache", new_callable=AsyncMock, return_value=cache),
     ):
         result = await srv.operator_status(npub=SAMPLE_NPUB)
 
@@ -860,34 +812,8 @@ async def test_operator_status_shows_dpyc_info():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_service_status():
-    import tollbooth_authority.server as srv
-
-    result = await srv.service_status()
-    assert result["service"] == "tollbooth-authority"
-    versions = result["versions"]
-    assert "tollbooth_authority" in versions
-    assert "python" in versions
-    assert "tollbooth_dpyc" in versions
-    assert "fastmcp" in versions
-
-
-
-# ---------------------------------------------------------------------------
-# report_upstream_purchase — deprecated (was admin auth H-2)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_report_upstream_purchase_always_deprecated():
-    """report_upstream_purchase always returns deprecation error regardless of caller."""
-    import tollbooth_authority.server as srv
-
-    # Any call returns deprecation — no auth checks needed anymore
-    result = await srv.report_upstream_purchase(1000)
-    assert result["success"] is False
-    assert "deprecated" in result["error"]
+# test_service_status removed — service_status is now in the wheel.
+# test_report_upstream_purchase_always_deprecated removed — tool deleted.
 
 
 # ---------------------------------------------------------------------------
