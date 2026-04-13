@@ -186,7 +186,7 @@ register_standard_tools(
 # The Authority's "patrons" are operators who may omit npub.
 @tool
 async def check_balance(
-    npub: Annotated[str, Field(description="Nostr public key (npub1...). Defaults to operator identity if empty.")] = "",
+    npub: Annotated[str, Field(description="Nostr public key (npub1...). Defaults to operator identity if empty.")] = "", proof: str = "",
 ) -> dict[str, Any]:
     """Check an operator's credit balance at the Authority."""
     try:
@@ -499,6 +499,7 @@ async def register_operator(
         str,
         Field(description="Your Nostr npub (bech32). Get one from the dpyc-oracle's how_to_join() tool."),
     ] = "",
+    proof: str = "",
     service_url: Annotated[
         str,
         Field(description="Your MCP endpoint URL (e.g. 'https://my-service.fastmcp.app/mcp')."),
@@ -570,7 +571,7 @@ async def register_operator(
 
 @tool
 async def update_operator(
-    npub: Annotated[str, Field(description="Nostr npub of the Operator to update.")] = "",
+    npub: Annotated[str, Field(description="Nostr npub of the Operator to update.")] = "", proof: str = "",
     service_url: Annotated[str, Field(description="New MCP endpoint URL (leave empty to keep current).")] = "",
     display_name: Annotated[str, Field(description="New display name (leave empty to keep current).")] = "",
 ) -> dict[str, Any]:
@@ -600,7 +601,7 @@ async def update_operator(
 
 @tool
 async def deregister_operator(
-    npub: Annotated[str, Field(description="Nostr npub of the Operator to deregister.")] = "",
+    npub: Annotated[str, Field(description="Nostr npub of the Operator to deregister.")] = "", proof: str = "",
 ) -> dict[str, Any]:
     """Remove an Operator from the DPYC community registry."""
     if not npub.startswith("npub1") or len(npub) < 60:
@@ -624,7 +625,7 @@ async def deregister_operator(
 @tool
 async def get_operator_config(
     npub: Annotated[str, Field(description="Your Nostr npub (bech32).")] = "",
-    operator_proof: Annotated[str, Field(description="Schnorr-signed kind-27235 event proving npub ownership.")] = "",
+    proof: str = "",
 ) -> dict[str, Any]:
     """Retrieve operator bootstrap configuration (Neon URL, schema).
 
@@ -633,11 +634,11 @@ async def get_operator_config(
     if not npub.startswith("npub1") or len(npub) < 60:
         return {"success": False, "error": "Invalid npub format."}
 
-    if not operator_proof:
-        return {"success": False, "error": "operator_proof is required."}
+    if not proof:
+        return {"success": False, "error": "proof is required."}
 
-    from tollbooth.operator_proof import verify_operator_proof
-    if not verify_operator_proof(operator_proof, npub, "get_operator_config"):
+    from tollbooth.identity_proof import verify_proof
+    if not verify_proof(proof, npub, "get_operator_config"):
         return {"success": False, "error": "Invalid operator proof."}
 
     try:
@@ -662,7 +663,7 @@ async def get_operator_config(
 
 @tool
 async def operator_status(
-    npub: Annotated[str, Field(description="Nostr public key (npub1...). Defaults to operator identity if empty.")] = "",
+    npub: Annotated[str, Field(description="Nostr public key (npub1...). Defaults to operator identity if empty.")] = "", proof: str = "",
 ) -> dict[str, Any]:
     """View registration status, balance summary, and the Authority's Nostr npub."""
     user_id = _resolve_npub_or_operator(npub)
@@ -707,6 +708,7 @@ async def certify_credits(
         str,
         Field(description="The operator's DPYC npub (from register_operator response)."),
     ] = "",
+    proof: str = "",
     amount_sats: Annotated[
         int,
         Field(description="The total purchase amount in satoshis. Must be positive."),
