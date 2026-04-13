@@ -1,6 +1,6 @@
 """Tollbooth Authority — Certified Purchase Order Service."""
 
-__version__ = "0.4.6"
+__version__ = "0.6.0"
 
 from tollbooth_authority.actor import AuthorityActor
 
