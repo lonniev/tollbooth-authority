@@ -714,8 +714,8 @@ async def certify_credits(
 ) -> dict[str, Any]:
     """Certify a purchase order: return a Schnorr-signed Nostr event certificate.
 
-    The paid_tool decorator handles the ad valorem fee debit (2% of amount_sats,
-    min 10 sats). This function signs the certificate.
+    The paid_tool decorator handles the ad valorem fee debit and stores
+    the cost in runtime._last_debit_cost. No recomputation needed.
 
     Called by operator MCP servers (not end users) when a patron purchases credits.
     """
@@ -726,11 +726,9 @@ async def certify_credits(
     nostr_signer = _get_nostr_signer()
     replay = _get_replay_tracker()
 
-    # Recompute fee for certificate claims (deterministic, no double-charge —
-    # paid_tool already debited this exact amount).
-    resolver = await runtime.pricing_resolver()
-    pricing = await resolver.get_tool_pricing(capability_uuid("certify_credits"))
-    fee_sats = pricing.compute(amount_sats=amount_sats)
+    # Use the fee computed and debited by the paid_tool decorator — single
+    # source of truth, no recomputation, no divergence risk.
+    fee_sats = getattr(runtime, "_last_debit_cost", 0)
     net_sats = amount_sats - fee_sats
 
     # DPYC registry membership check (fail closed)

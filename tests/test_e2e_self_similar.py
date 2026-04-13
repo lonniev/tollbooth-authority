@@ -69,17 +69,16 @@ def _clean_state():
     reset_jti_store()
 
 
-async def _call_certify_credits(npub: str, amount_sats: int) -> dict:
+async def _call_certify_credits(npub: str, amount_sats: int, fee_sats: int = 20) -> dict:
     """Call certify_credits directly, bypassing paid_tool wrapper.
 
-    The paid_tool wrapper handles billing via debit_or_deny.
-    This test calls the unwrapped __wrapped__ function to test the
-    certification logic itself (signing, fees, upstream).
+    The paid_tool wrapper stores _last_debit_cost on the runtime.
+    Since we bypass the wrapper, we set it explicitly.
     """
     import tollbooth_authority.server as srv
 
+    srv.runtime._last_debit_cost = fee_sats
     fn = srv.certify_credits
-    # The paid_tool decorator wraps the function. Access the inner function.
     while hasattr(fn, "__wrapped__"):
         fn = fn.__wrapped__
     return await fn(npub=npub, amount_sats=amount_sats)

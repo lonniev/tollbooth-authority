@@ -8,7 +8,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pynostr.key import PrivateKey  # type: ignore[import-untyped]
 
-from tollbooth import UserLedger, LedgerCache
+from tollbooth import UserLedger, LedgerCache, ToolPricing
+
+
+def _mock_debit(runtime, kw):
+    """Simulate debit_or_deny: compute cost and store on runtime."""
+    tool_kwargs = kw.get("tool_kwargs", {})
+    try:
+        cost = ToolPricing(rate_percent=2.0, rate_param="amount_sats", min_cost=10).compute(**tool_kwargs)
+    except (ValueError, TypeError):
+        cost = 0
+    runtime._last_debit_cost = cost
+    return cost
 
 from tollbooth_authority.config import AuthoritySettings
 from tollbooth_authority.nostr_signing import AuthorityNostrSigner, NOSTR_CERT_KIND
@@ -41,7 +52,8 @@ def _mock_runtime():
     """Mock OperatorRuntime methods so tests don't need Neon/bootstrap."""
     import tollbooth_authority.server as srv
     with (
-        patch.object(srv.runtime, "debit_or_deny", new_callable=AsyncMock, return_value=None),
+        patch.object(srv.runtime, "debit_or_deny", new_callable=AsyncMock,
+                     side_effect=lambda tool_id, npub, **kw: _mock_debit(srv.runtime, kw)),
         patch.object(srv.runtime, "pricing_resolver", new_callable=AsyncMock, return_value=_mock_pricing_resolver()),
         patch.object(srv.runtime, "rollback_debit", new_callable=AsyncMock),
         patch.object(srv.runtime, "fire_and_forget_demand_increment"),
