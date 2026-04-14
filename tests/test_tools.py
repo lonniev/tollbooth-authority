@@ -9,6 +9,10 @@ import pytest
 from pynostr.key import PrivateKey  # type: ignore[import-untyped]
 
 from tollbooth import UserLedger, LedgerCache, ToolPricing
+from tollbooth_authority.config import AuthoritySettings
+from tollbooth_authority.nostr_signing import AuthorityNostrSigner, NOSTR_CERT_KIND
+from tollbooth_authority.registry import DPYCRegistry, RegistryError
+from tollbooth_authority.replay import ReplayTracker
 
 
 def _mock_debit(runtime, kw):
@@ -20,11 +24,6 @@ def _mock_debit(runtime, kw):
         cost = 0
     runtime._last_debit_cost = cost
     return cost
-
-from tollbooth_authority.config import AuthoritySettings
-from tollbooth_authority.nostr_signing import AuthorityNostrSigner, NOSTR_CERT_KIND
-from tollbooth_authority.registry import DPYCRegistry, RegistryError
-from tollbooth_authority.replay import ReplayTracker
 
 SAMPLE_NPUB = "npub1l94pd4qu4eszrl6ek032ftcnsu3tt9a7xvq2zp7eaxeklp6mrpzssmq8pf"
 
