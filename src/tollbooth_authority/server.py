@@ -542,7 +542,7 @@ async def register_operator(
     cache.mark_dirty(npub)
     await cache.flush_user(npub)
 
-    # Provision isolated Neon schema
+    # Provision isolated Neon schema with per-operator role
     neon_url = ""
     try:
         vault = await runtime.vault()
@@ -550,16 +550,26 @@ async def register_operator(
             ensure_bootstrap_table,
             provision_operator_schema,
             store_operator_config,
-            neon_url_with_schema,
+            neon_url_for_operator,
         )
         await ensure_bootstrap_table(vault)
-        schema = await provision_operator_schema(vault, npub)
         s = _get_settings()
+        schema, password = await provision_operator_schema(
+            vault, npub,
+            base_url=s.neon_database_url,
+            authority_nsec_hex=getattr(s, "tollbooth_nostr_operator_nsec_hex", ""),
+        )
         if s.neon_database_url:
-            neon_url = neon_url_with_schema(s.neon_database_url, schema)
+            neon_url = neon_url_for_operator(s.neon_database_url, schema, password)
             await store_operator_config(vault, npub, "neon_database_url", neon_url)
             await store_operator_config(vault, npub, "schema", schema)
-            logger.info("Provisioned Neon tenant for operator %s schema=%s", npub[:16], schema)
+            # Encrypt password before storing
+            if getattr(vault, "_cipher", None):
+                encrypted_pw = vault._encrypt(password)
+            else:
+                encrypted_pw = password
+            await store_operator_config(vault, npub, "role_password", encrypted_pw)
+            logger.info("Provisioned Neon tenant for operator %s schema=%s (role-isolated)", npub[:16], schema)
             await _resend_bootstrap_dm(npub)
     except Exception as exc:
         logger.warning("Neon tenant provisioning failed (non-fatal): %s", exc)
@@ -672,10 +682,13 @@ async def get_operator_config(
 
     await _resend_bootstrap_dm(npub)
 
+    # Filter internal secrets from response
+    filtered = {k: v for k, v in config.items() if k != "role_password"}
+
     return {
         "success": True,
         "npub": npub,
-        "config": config,
+        "config": filtered,
         "message": f"Bootstrap configuration for {npub[:16]}... ({len(config)} entries).",
     }
 

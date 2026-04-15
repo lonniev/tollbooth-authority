@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import secrets
 from typing import Any
-from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
+from urllib.parse import urlparse, urlunparse, parse_qs, urlencode, quote
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,109 @@ def neon_url_with_schema(base_url: str, schema: str) -> str:
     return urlunparse(parsed._replace(query=new_query))
 
 
+def extract_authority_role(database_url: str) -> str:
+    """Parse the Authority's Postgres role name from its connection URL."""
+    return urlparse(database_url).username or ""
+
+
+def neon_url_for_operator(base_url: str, schema: str, password: str) -> str:
+    """Build a connection URL with operator-scoped role credentials.
+
+    Replaces the Authority's user:pass with the operator role and
+    generated password. Keeps ``search_path`` option.
+    """
+    parsed = urlparse(base_url)
+    encoded_pw = quote(password, safe="")
+    netloc = f"{schema}:{encoded_pw}@{parsed.hostname}"
+    if parsed.port:
+        netloc += f":{parsed.port}"
+    params = parse_qs(parsed.query)
+    params["options"] = [f"-c search_path={schema}"]
+    new_query = urlencode(params, doseq=True)
+    return urlunparse(parsed._replace(netloc=netloc, query=new_query))
+
+
+# -- Per-operator Postgres role management ------------------------------------
+
+_PROVISIONER_TABLES = ("ledger", "ledger_journal", "credentials", "anchors")
+
+
+async def create_operator_role(vault: Any, schema: str, password: str) -> None:
+    """Create a Postgres LOGIN role for an operator schema.
+
+    Idempotent: if the role already exists, resets its password.
+    """
+    try:
+        await vault._execute(
+            f'CREATE ROLE "{schema}" WITH LOGIN PASSWORD \'{password}\''
+        )
+        logger.info("Created Postgres role '%s'", schema)
+    except Exception as exc:
+        # Neon HTTP API returns 400 with error body — extract the message
+        exc_text = str(exc).lower()
+        resp_text = ""
+        if hasattr(exc, "response"):
+            try:
+                resp_text = exc.response.text.lower()
+            except Exception:
+                pass
+        if "already exists" in exc_text or "already exists" in resp_text:
+            await vault._execute(
+                f'ALTER ROLE "{schema}" WITH PASSWORD \'{password}\''
+            )
+            logger.info("Reset password for existing role '%s'", schema)
+        else:
+            raise
+
+    # Allow Authority to SET ROLE for ownership transfers
+    await vault._execute(f'GRANT "{schema}" TO CURRENT_USER')
+    await vault._execute(f'GRANT USAGE ON SCHEMA "{schema}" TO "{schema}"')
+    await vault._execute(f'GRANT CREATE ON SCHEMA "{schema}" TO "{schema}"')
+    await vault._execute(
+        f'ALTER DEFAULT PRIVILEGES IN SCHEMA "{schema}" '
+        f'GRANT ALL ON TABLES TO "{schema}"'
+    )
+    await vault._execute(
+        f'ALTER DEFAULT PRIVILEGES IN SCHEMA "{schema}" '
+        f'GRANT ALL ON SEQUENCES TO "{schema}"'
+    )
+
+
+async def transfer_schema_ownership(vault: Any, schema: str) -> None:
+    """Transfer schema and table ownership to the operator role."""
+    await vault._execute(f'ALTER SCHEMA "{schema}" OWNER TO "{schema}"')
+    for table in _PROVISIONER_TABLES:
+        try:
+            await vault._execute(
+                f'ALTER TABLE "{schema}".{table} OWNER TO "{schema}"'
+            )
+        except Exception:
+            pass  # table may not exist if operator never fully initialized
+
+
+async def revoke_authority_access(
+    vault: Any, schema: str, authority_role: str,
+) -> None:
+    """Revoke the Authority's DML access to an operator schema."""
+    await vault._execute(
+        f'REVOKE ALL ON ALL TABLES IN SCHEMA "{schema}" FROM PUBLIC'
+    )
+    await vault._execute(
+        f'REVOKE ALL ON SCHEMA "{schema}" FROM PUBLIC'
+    )
+    if authority_role:
+        await vault._execute(
+            f'REVOKE ALL ON ALL TABLES IN SCHEMA "{schema}" FROM "{authority_role}"'
+        )
+
+
+def generate_operator_password() -> str:
+    """Generate a secure random password for an operator role."""
+    return secrets.token_urlsafe(32)
+
+
+# -- Bootstrap table ---------------------------------------------------------
+
 async def ensure_bootstrap_table(vault: Any) -> None:
     """Create the bootstrap_config table if it doesn't exist.
 
@@ -59,11 +163,18 @@ async def ensure_bootstrap_table(vault: Any) -> None:
     """)
 
 
-async def provision_operator_schema(vault: Any, npub: str) -> str:
-    """Create an isolated Postgres schema for an operator.
+async def provision_operator_schema(
+    vault: Any,
+    npub: str,
+    base_url: str = "",
+    authority_nsec_hex: str = "",
+) -> tuple[str, str]:
+    """Create an isolated Postgres schema with a per-operator role.
 
-    Creates the schema and the standard tollbooth tables within it.
-    Returns the schema name.
+    Creates the schema, tables, a LOGIN role scoped to the schema,
+    transfers ownership, and revokes Authority DML access.
+
+    Returns ``(schema_name, role_password)``.
     """
     schema = schema_name_for_npub(npub)
 
@@ -110,8 +221,16 @@ async def provision_operator_schema(vault: Any, npub: str) -> str:
         )
     """)
 
-    logger.info("Provisioned schema '%s' for operator %s", schema, npub[:16])
-    return schema
+    # Create operator role, transfer ownership, revoke Authority access
+    password = generate_operator_password()
+    await create_operator_role(vault, schema, password)
+    await transfer_schema_ownership(vault, schema)
+    if base_url:
+        authority_role = extract_authority_role(base_url)
+        await revoke_authority_access(vault, schema, authority_role)
+
+    logger.info("Provisioned schema '%s' with isolated role for operator %s", schema, npub[:16])
+    return schema, password
 
 
 async def store_operator_config(
