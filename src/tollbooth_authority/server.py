@@ -11,6 +11,7 @@ from pydantic import Field
 
 from fastmcp import FastMCP
 
+from tollbooth.credential_templates import CredentialTemplate, FieldSpec
 from tollbooth.runtime import OperatorRuntime, register_standard_tools, resolve_npub
 from tollbooth.slug_tools import make_slug_tool
 from tollbooth.tool_identity import (
@@ -170,6 +171,25 @@ runtime = OperatorRuntime(
     purchase_mode="direct",  # Authority is trust root — no upstream cert
     service_name="Tollbooth Authority",
     ots_enabled=True,
+    operator_credential_template=CredentialTemplate(
+        service="tollbooth-authority-operator",
+        version=1,
+        description="BTCPay Lightning payment credentials for the Authority cashier",
+        fields={
+            "btcpay_host": FieldSpec(
+                required=True, sensitive=True,
+                description="The URL of your BTCPay Server instance (e.g. https://btcpay.example.com).",
+            ),
+            "btcpay_api_key": FieldSpec(
+                required=True, sensitive=True,
+                description="Your BTCPay Server API key with btcpay.store.cancreateinvoice permission.",
+            ),
+            "btcpay_store_id": FieldSpec(
+                required=True, sensitive=True,
+                description="Your BTCPay Store ID (visible in Store Settings).",
+            ),
+        },
+    ),
 )
 
 register_standard_tools(

@@ -8,11 +8,6 @@ from pydantic_settings import BaseSettings
 class AuthoritySettings(BaseSettings):
     """All env vars for the Tollbooth Authority service."""
 
-    # Authority's own BTCPay (for collecting operator tax)
-    btcpay_host: str = ""
-    btcpay_store_id: str = ""
-    btcpay_api_key: str = ""
-
     # TheBrain vault for operator ledger persistence
     thebrain_api_key: str = ""
     thebrain_vault_brain_id: str = ""
