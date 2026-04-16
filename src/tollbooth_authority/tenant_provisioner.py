@@ -67,7 +67,10 @@ def neon_url_for_operator(base_url: str, schema: str, password: str) -> str:
 
 # -- Per-operator Postgres role management ------------------------------------
 
-_PROVISIONER_TABLES = ("ledger", "ledger_journal", "credentials", "anchors")
+_PROVISIONER_TABLES = (
+    "balances", "transactions", "anchors", "tool_demand",
+    "operator_pricing_models", "credentials", "session_bindings",
+)
 
 
 async def create_operator_role(vault: Any, schema: str, password: str) -> None:
@@ -146,14 +149,19 @@ def generate_operator_password() -> str:
 
 # -- Bootstrap table ---------------------------------------------------------
 
+def _t(vault: Any, table: str) -> str:
+    """Schema-qualified table name, delegated to the vault if available."""
+    return vault._t(table) if hasattr(vault, '_t') else table
+
+
 async def ensure_bootstrap_table(vault: Any) -> None:
     """Create the bootstrap_config table if it doesn't exist.
 
     Stores operator-specific key-value pairs in the Authority's schema.
     Access is gated by Schnorr proof in the get_operator_config tool.
     """
-    await vault._execute("""
-        CREATE TABLE IF NOT EXISTS bootstrap_config (
+    await vault._execute(f"""
+        CREATE TABLE IF NOT EXISTS {_t(vault, 'bootstrap_config')} (
             npub TEXT NOT NULL,
             key TEXT NOT NULL,
             value TEXT NOT NULL,
@@ -178,48 +186,9 @@ async def provision_operator_schema(
     """
     schema = schema_name_for_npub(npub)
 
-    # Create schema (idempotent)
+    # Create schema (idempotent). The SDK's ensure_schema() creates
+    # the actual tables (balances, transactions, etc.) on first boot.
     await vault._execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
-
-    # Create standard tollbooth tables in the new schema
-    await vault._execute(f"""
-        CREATE TABLE IF NOT EXISTS "{schema}".ledger (
-            user_id TEXT PRIMARY KEY,
-            ledger_json TEXT NOT NULL DEFAULT '{{}}',
-            version INTEGER NOT NULL DEFAULT 1,
-            updated_at TIMESTAMPTZ DEFAULT now()
-        )
-    """)
-    await vault._execute(f"""
-        CREATE TABLE IF NOT EXISTS "{schema}".ledger_journal (
-            id BIGSERIAL PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            snapshot TEXT NOT NULL,
-            created_at TIMESTAMPTZ DEFAULT now()
-        )
-    """)
-    await vault._execute(f"""
-        CREATE TABLE IF NOT EXISTS "{schema}".credentials (
-            service TEXT NOT NULL,
-            npub TEXT NOT NULL,
-            encrypted_json TEXT NOT NULL,
-            updated_at TIMESTAMPTZ DEFAULT now(),
-            PRIMARY KEY (service, npub)
-        )
-    """)
-    await vault._execute(f"""
-        CREATE TABLE IF NOT EXISTS "{schema}".anchors (
-            id BIGSERIAL PRIMARY KEY,
-            root_hash TEXT NOT NULL,
-            leaf_count INTEGER NOT NULL,
-            status TEXT NOT NULL DEFAULT 'submitted',
-            ots_receipts_json TEXT,
-            snapshot_json TEXT,
-            leaf_hashes_json TEXT,
-            created_at TIMESTAMPTZ,
-            confirmed_at TIMESTAMPTZ
-        )
-    """)
 
     # Create operator role, transfer ownership, revoke Authority access
     password = generate_operator_password()
@@ -238,12 +207,10 @@ async def store_operator_config(
 ) -> None:
     """Store a config entry in the bootstrap table."""
     await vault._execute(
-        """
-        INSERT INTO bootstrap_config (npub, key, value)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (npub, key)
-        DO UPDATE SET value = $3, created_at = now()
-        """,
+        f"INSERT INTO {_t(vault, 'bootstrap_config')} (npub, key, value) "
+        "VALUES ($1, $2, $3) "
+        "ON CONFLICT (npub, key) "
+        "DO UPDATE SET value = $3, created_at = now()",
         [npub, key, value],
     )
 
@@ -253,7 +220,7 @@ async def get_operator_config_value(
 ) -> str | None:
     """Retrieve a config entry from the bootstrap table."""
     result = await vault._execute(
-        "SELECT value FROM bootstrap_config WHERE npub = $1 AND key = $2",
+        f"SELECT value FROM {_t(vault, 'bootstrap_config')} WHERE npub = $1 AND key = $2",
         [npub, key],
     )
     rows = result.get("rows", [])
@@ -265,7 +232,7 @@ async def get_operator_config_value(
 async def get_all_operator_config(vault: Any, npub: str) -> dict[str, str]:
     """Retrieve all config entries for an operator."""
     result = await vault._execute(
-        "SELECT key, value FROM bootstrap_config WHERE npub = $1",
+        f"SELECT key, value FROM {_t(vault, 'bootstrap_config')} WHERE npub = $1",
         [npub],
     )
     config: dict[str, str] = {}

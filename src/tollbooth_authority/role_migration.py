@@ -93,8 +93,9 @@ async def migrate_all_operators(
     Enumerates operators from bootstrap_config and migrates each.
     Failures are logged and returned but do not stop the batch.
     """
+    t = vault._t if hasattr(vault, '_t') else lambda x: x
     result = await vault._execute(
-        "SELECT DISTINCT npub FROM bootstrap_config WHERE key = 'schema'"
+        f"SELECT DISTINCT npub FROM {t('bootstrap_config')} WHERE key = 'schema'"
     )
     rows = result.get("rows", [])
     npubs = []

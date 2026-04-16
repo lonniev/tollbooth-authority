@@ -124,8 +124,8 @@ async def test_table_ownership_transfer(vault):
 
     calls = [c.args[0] for c in vault._execute.call_args_list]
     assert any(f'ALTER SCHEMA "{SAMPLE_SCHEMA}" OWNER TO "{SAMPLE_SCHEMA}"' in c for c in calls)
-    assert any(f'"{SAMPLE_SCHEMA}".ledger OWNER TO "{SAMPLE_SCHEMA}"' in c for c in calls)
-    assert any(f'"{SAMPLE_SCHEMA}".ledger_journal OWNER TO' in c for c in calls)
+    assert any(f'"{SAMPLE_SCHEMA}".balances OWNER TO "{SAMPLE_SCHEMA}"' in c for c in calls)
+    assert any(f'"{SAMPLE_SCHEMA}".transactions OWNER TO' in c for c in calls)
     assert any(f'"{SAMPLE_SCHEMA}".credentials OWNER TO' in c for c in calls)
     assert any(f'"{SAMPLE_SCHEMA}".anchors OWNER TO' in c for c in calls)
 
