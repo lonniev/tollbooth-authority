@@ -7,8 +7,7 @@ Uses mocked vault._execute() — no real Neon connection needed.
 
 from __future__ import annotations
 
-import os
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -17,8 +16,6 @@ from tollbooth_authority.tenant_provisioner import (
     extract_authority_role,
     generate_operator_password,
     neon_url_for_operator,
-    neon_url_with_schema,
-    revoke_authority_access,
     schema_name_for_npub,
     transfer_schema_ownership,
 )
