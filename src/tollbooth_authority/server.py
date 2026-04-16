@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 import uuid
 from typing import Annotated, Any
@@ -169,11 +170,10 @@ def _get_settings() -> AuthoritySettings:
 # Inject search_path=authority so the Authority's tables land in
 # the "authority" schema, not "public". OperatorRuntime reads
 # NEON_DATABASE_URL lazily — this must happen before first vault() call.
-import os as _os
-_raw_neon_url = _os.environ.get("NEON_DATABASE_URL", "")
+_raw_neon_url = os.environ.get("NEON_DATABASE_URL", "")
 if _raw_neon_url and "search_path" not in _raw_neon_url:
     from tollbooth_authority.tenant_provisioner import neon_url_with_schema
-    _os.environ["NEON_DATABASE_URL"] = neon_url_with_schema(_raw_neon_url, "authority")
+    os.environ["NEON_DATABASE_URL"] = neon_url_with_schema(_raw_neon_url, "authority")
 
 runtime = OperatorRuntime(
     tool_registry={**STANDARD_IDENTITIES, **TOOL_REGISTRY},
