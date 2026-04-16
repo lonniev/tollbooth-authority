@@ -16,6 +16,7 @@ from tollbooth_authority.tenant_provisioner import (
     extract_authority_role,
     generate_operator_password,
     neon_url_for_operator,
+    revoke_authority_access,
     schema_name_for_npub,
     transfer_schema_ownership,
 )
