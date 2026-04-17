@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import secrets
 from typing import Any
 from urllib.parse import urlparse, urlunparse, parse_qs, urlencode, quote
@@ -30,12 +31,19 @@ def schema_name_for_npub(npub: str) -> str:
     return f"op_{digest}"
 
 
+def _validate_schema_name(schema: str) -> None:
+    """Reject schema names that aren't safe Postgres identifiers."""
+    if not re.match(r"^[a-z][a-z0-9_]*$", schema):
+        raise ValueError(f"Unsafe schema name: {schema!r}")
+
+
 def neon_url_with_schema(base_url: str, schema: str) -> str:
     """Append search_path option to a Neon connection URL.
 
     The operator connects with this URL and all tables resolve within
     the operator's isolated schema.
     """
+    _validate_schema_name(schema)
     parsed = urlparse(base_url)
     params = parse_qs(parsed.query)
     params["options"] = [f"-c search_path={schema}"]
@@ -73,11 +81,19 @@ _PROVISIONER_TABLES = (
 )
 
 
+_SAFE_IDENTIFIER = re.compile(r"^[a-z0-9_]+$")
+_SAFE_PASSWORD = re.compile(r"^[A-Za-z0-9_\-]+$")
+
+
 async def create_operator_role(vault: Any, schema: str, password: str) -> None:
     """Create a Postgres LOGIN role for an operator schema.
 
     Idempotent: if the role already exists, resets its password.
     """
+    if not _SAFE_IDENTIFIER.match(schema):
+        raise ValueError(f"Unsafe schema name: {schema!r}")
+    if not _SAFE_PASSWORD.match(password):
+        raise ValueError("Password contains unsafe characters")
     try:
         await vault._execute(
             f'CREATE ROLE "{schema}" WITH LOGIN PASSWORD \'{password}\''
