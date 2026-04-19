@@ -145,19 +145,41 @@ Once connected, walk through the bootstrap in order:
 
 To run your own Authority instance, set these environment variables:
 
+#### Required
+
 | Variable | Purpose | Example |
 |----------|---------|---------|
-| `NEON_DATABASE_URL` | Neon Postgres URL for persistent operator ledgers (required) | `postgresql://...` |
-| `TOLLBOOTH_NOSTR_OPERATOR_NSEC` | Nostr secret key (nsec) for Schnorr certificate signing | `nsec1...` |
-| `BTCPAY_HOST` | Authority's BTCPay Server URL for fee collection | `https://btcpay.example.com` |
-| `BTCPAY_STORE_ID` | BTCPay store ID for the Authority's fee store | `AbCdEfGh1234` |
-| `BTCPAY_API_KEY` | BTCPay API key with invoice + payout permissions | `your-btcpay-api-key` |
-| `DPYC_COMMUNITY_REGISTRY_URL` | URL to `members.json` for membership enforcement | `https://raw.githubusercontent.com/...` |
+| `NEON_DATABASE_URL` | Neon Postgres URL for persistent operator ledgers. The Authority IS the trust root -- it reads this from env (unlike certified operators, which bootstrap it from Authority via Nostr DM). At startup, the Authority injects `search_path=authority` into the connection string for per-schema isolation. | `postgresql://...` |
+| `TOLLBOOTH_NOSTR_OPERATOR_NSEC` | Nostr secret key (nsec) for Schnorr certificate signing and Secure Courier DMs | `nsec1...` |
+
+#### Credentials via Secure Courier (NOT env vars)
+
+BTCPay credentials are delivered via Secure Courier, not set as environment variables:
+
+| Credential | Description |
+|------------|-------------|
+| `btcpay_host` | Authority's BTCPay Server URL for fee collection |
+| `btcpay_api_key` | BTCPay API key with invoice + payout permissions |
+| `btcpay_store_id` | BTCPay store ID for the Authority's fee store |
+
+#### Optional
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `TOLLBOOTH_NOSTR_RELAYS` | Comma-separated relay URLs | built-in defaults |
+| `TOLLBOOTH_NOSTR_AUDIT_ENABLED` | Enable NIP-78 audit trail on vault writes | `false` |
+| `UPSTREAM_AUTHORITY_ADDRESS` | Upstream Authority MCP URL (empty for Prime Authority) | *(empty)* |
+| `CERTIFICATE_TTL_SECONDS` | How long a signed certificate remains valid | `600` (10 min) |
 | `DPYC_ENFORCE_MEMBERSHIP` | Enable registry enforcement at certification time | `true` |
-| `TAX_RATE_PERCENT` | Fee rate as a percentage of each certified purchase | `2.0` (default) |
-| `TAX_MIN_SATS` | Minimum fee per certification in satoshis | `10` (default) |
-| `CERTIFICATE_TTL_SECONDS` | How long a signed certificate remains valid | `600` (default, 10 minutes) |
-| `UPSTREAM_AUTHORITY_ADDRESS` | Upstream Authority MCP URL (empty for Prime Authority) | `https://...` |
+| `DPYC_REGISTRY_CACHE_TTL_SECONDS` | How long to cache the DPYC community registry | `300` |
+
+#### Per-Operator Schema Isolation
+
+Each registered operator receives an isolated Neon schema (`op_{hash}`) with a dedicated Postgres LOGIN role. The Authority schema (`authority`) holds the Authority's own ledger. Operator schemas are provisioned automatically by `register_operator` and access is enforced via role-based grants -- no cross-operator data access is possible.
+
+#### Deprecated Alternatives
+
+Legacy deployments may still use `THEBRAIN_API_KEY`, `THEBRAIN_BRAIN_ID`, and `THEBRAIN_VAULT_THOUGHT_ID` environment variables for TheBrain-based vault storage. These are superseded by NeonVault and will be removed in a future release.
 
 ## Development
 
