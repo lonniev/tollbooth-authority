@@ -774,13 +774,25 @@ async def certify_credits(
     fee_sats = getattr(runtime, "_last_debit_cost", 0)
     net_sats = amount_sats - fee_sats
 
-    # DPYC registry membership check (fail closed)
+    # DPYC registry membership check (fail closed).
+    # Membership is an expected lifecycle gate, not an exception.
+    # Refund the certification fee and return a structured error
+    # so the caller can route directly to the recovery flow.
     registry = _get_dpyc_registry()
     if registry is not None:
         try:
             await registry.check_membership(npub)
         except RegistryError as e:
-            raise RuntimeError(f"DPYC membership check failed: {e}")
+            await runtime.rollback_debit(capability_uuid("certify_credits"), npub)
+            return {
+                "success": False,
+                "error_code": "dpyc_membership_required",
+                "error": f"DPYC membership check failed: {e}",
+                "next_steps": [
+                    "Confirm the operator npub is registered in dpyc-community members.json",
+                    "If unregistered, register via the DPYC Oracle's registration flow",
+                ],
+            }
 
     # Build claims and sign certificate
     jti = uuid.uuid4().hex
