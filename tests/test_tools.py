@@ -14,6 +14,11 @@ from tollbooth_authority.nostr_signing import AuthorityNostrSigner, NOSTR_CERT_K
 from tollbooth_authority.registry import DPYCRegistry, RegistryError
 from tollbooth_authority.replay import ReplayTracker
 
+# Capture the real proof-verifier at module-import time, BEFORE the autouse
+# fixture below replaces it with a no-op. Test classes that want the real
+# behavior restore from this reference.
+from tollbooth_authority.server import _verify_operator_proof as _REAL_VERIFY_OPERATOR_PROOF  # noqa: E402
+
 
 def _mock_debit(runtime, kw):
     """Simulate debit_or_deny: compute cost and store on runtime."""
@@ -48,7 +53,13 @@ def _mock_pricing_resolver():
 
 @pytest.fixture(autouse=True)
 def _mock_runtime():
-    """Mock OperatorRuntime methods so tests don't need Neon/bootstrap."""
+    """Mock OperatorRuntime methods so tests don't need Neon/bootstrap.
+
+    Also short-circuits the proof-verification helper to success — the
+    DRY ``_verify_operator_proof`` is exercised in its own focused tests
+    in ``TestVerifyOperatorProof`` below; broad tool tests don't need to
+    mint real Schnorr proofs.
+    """
     import tollbooth_authority.server as srv
     with (
         patch.object(srv.runtime, "debit_or_deny", new_callable=AsyncMock,
@@ -58,6 +69,7 @@ def _mock_runtime():
         patch.object(srv.runtime, "fire_and_forget_demand_increment"),
         patch.object(srv.runtime, "mcp_name_for", return_value="authority_certify_credits"),
         patch.object(srv.runtime, "inject_low_balance_warning", new_callable=AsyncMock, side_effect=lambda r, n: r),
+        patch.object(srv, "_verify_operator_proof", return_value=None),
     ):
         yield
 
@@ -353,10 +365,15 @@ async def test_operator_status_shows_upstream_auto_mode():
 
 @pytest.mark.asyncio
 async def test_register_operator_invalid_npub():
-    """register_operator rejects invalid npub format."""
+    """register_operator rejects invalid npub format.
+
+    The format check now lives in _verify_operator_proof (DRY); override
+    the autouse no-op stub with the real helper so the check fires.
+    """
     import tollbooth_authority.server as srv
 
-    result = await srv.register_operator(npub="not-an-npub")
+    with patch.object(srv, "_verify_operator_proof", _REAL_VERIFY_OPERATOR_PROOF):
+        result = await srv.register_operator(npub="not-an-npub")
 
     assert result["success"] is False
     assert "Invalid npub" in result["error"]
@@ -892,5 +909,115 @@ async def test_check_authority_approval_no_response():
 
     assert result["success"] is False
     assert "No approval received" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# _verify_operator_proof — DRY helper used by every restricted Authority tool
+# ---------------------------------------------------------------------------
+
+
+class TestVerifyOperatorProof:
+    """Direct tests for the proof-verification helper.
+
+    The broad tool tests patch this helper to a no-op via the autouse
+    `_mock_runtime` fixture; these tests call the real implementation
+    directly by reference, bypassing the module-attribute indirection.
+    """
+
+    def test_rejects_malformed_npub(self):
+        err = _REAL_VERIFY_OPERATOR_PROOF("not-an-npub", "any-proof", "register_operator")
+        assert err is not None
+        assert err["success"] is False
+        assert "Invalid npub format" in err["error"]
+
+    def test_rejects_short_npub(self):
+        # Starts with npub1 but too short to be a real bech32 encoding.
+        err = _REAL_VERIFY_OPERATOR_PROOF("npub1short", "any-proof", "register_operator")
+        assert err is not None
+        assert "Invalid npub format" in err["error"]
+
+    def test_rejects_missing_proof(self):
+        err = _REAL_VERIFY_OPERATOR_PROOF(SAMPLE_NPUB, "", "register_operator")
+        assert err is not None
+        assert err["error"] == "proof is required."
+
+    def test_rejects_invalid_proof(self):
+        """A non-empty but invalid proof string fails the verify_proof check."""
+        err = _REAL_VERIFY_OPERATOR_PROOF(SAMPLE_NPUB, "garbage-token", "register_operator")
+        assert err is not None
+        assert err["error"] == "Invalid operator proof."
+
+    def test_accepts_valid_proof(self):
+        """When verify_proof returns True, the helper returns None (pass)."""
+        with patch("tollbooth.identity_proof.verify_proof", return_value=True):
+            result = _REAL_VERIFY_OPERATOR_PROOF(SAMPLE_NPUB, "valid-token", "register_operator")
+        assert result is None
+
+    def test_tool_name_is_bound_into_verification(self):
+        """The tool_name argument flows through to verify_proof so a proof
+        issued for one tool cannot be replayed against another."""
+        with patch("tollbooth.identity_proof.verify_proof", return_value=True) as vp:
+            _REAL_VERIFY_OPERATOR_PROOF(SAMPLE_NPUB, "tok", "update_operator")
+        vp.assert_called_once_with("tok", SAMPLE_NPUB, "update_operator")
+
+
+# ---------------------------------------------------------------------------
+# Per-tool proof-rejection regression coverage
+# ---------------------------------------------------------------------------
+
+
+class TestToolsRejectMissingProof:
+    """For each restricted Authority tool, confirm the proof-check fires
+    and returns the helper's error envelope when proof is absent.
+
+    Uses an explicit `patch.object` per test to override the autouse
+    `_mock_runtime` no-op stub with the real `_verify_operator_proof`
+    body. (A class-level `monkeypatch.setattr` fixture would lose the
+    race against the module-level autouse patch.)
+    """
+
+    @pytest.mark.asyncio
+    async def test_register_operator_requires_proof(self):
+        import tollbooth_authority.server as srv
+        with patch.object(srv, "_verify_operator_proof", _REAL_VERIFY_OPERATOR_PROOF):
+            result = await srv.register_operator(npub=SAMPLE_NPUB, proof="")
+        assert result["success"] is False
+        assert result["error"] == "proof is required."
+
+    @pytest.mark.asyncio
+    async def test_update_operator_requires_proof(self):
+        import tollbooth_authority.server as srv
+        with patch.object(srv, "_verify_operator_proof", _REAL_VERIFY_OPERATOR_PROOF):
+            result = await srv.update_operator(
+                npub=SAMPLE_NPUB, proof="", service_url="https://attacker.example.com"
+            )
+        assert result["success"] is False
+        assert result["error"] == "proof is required."
+
+    @pytest.mark.asyncio
+    async def test_deregister_operator_requires_proof(self):
+        import tollbooth_authority.server as srv
+        with patch.object(srv, "_verify_operator_proof", _REAL_VERIFY_OPERATOR_PROOF):
+            result = await srv.deregister_operator(npub=SAMPLE_NPUB, proof="")
+        assert result["success"] is False
+        assert result["error"] == "proof is required."
+
+    @pytest.mark.asyncio
+    async def test_operator_status_requires_proof_when_npub_provided(self):
+        """With an explicit npub, proof is mandatory — otherwise any caller
+        could enumerate balances across the chain."""
+        import tollbooth_authority.server as srv
+        with patch.object(srv, "_verify_operator_proof", _REAL_VERIFY_OPERATOR_PROOF):
+            result = await srv.operator_status(npub=SAMPLE_NPUB, proof="")
+        assert result["success"] is False
+        assert result["error"] == "proof is required."
+
+    @pytest.mark.asyncio
+    async def test_check_balance_requires_proof_when_npub_provided(self):
+        import tollbooth_authority.server as srv
+        with patch.object(srv, "_verify_operator_proof", _REAL_VERIFY_OPERATOR_PROOF):
+            result = await srv.check_balance(npub=SAMPLE_NPUB, proof="")
+        assert result["success"] is False
+        assert result["error"] == "proof is required."
 
 

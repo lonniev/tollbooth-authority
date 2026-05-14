@@ -163,6 +163,44 @@ def _get_settings() -> AuthoritySettings:
     return _settings
 
 
+def _verify_operator_proof(
+    npub: str, proof: str, tool_name: str
+) -> dict[str, Any] | None:
+    """Validate that the caller controls `npub` for the named tool.
+
+    Returns ``None`` when the proof verifies — the caller should proceed
+    with side effects. Returns a structured error dict otherwise; the
+    caller should return that dict immediately.
+
+    Checks three things, in order:
+      1. npub is well-formed (starts with ``npub1``, ≥ 60 chars).
+      2. proof token is non-empty.
+      3. proof verifies against npub for ``tool_name`` via the wheel's
+         ``verify_proof``. The tool-name binding prevents a proof issued
+         for one tool from being replayed against another.
+
+    Used by every Authority tool that mutates the community registry or
+    exposes per-operator financial data — register_operator,
+    update_operator, deregister_operator, get_operator_config, and
+    (for the explicit-npub form) operator_status / check_balance.
+    """
+    if not npub.startswith("npub1") or len(npub) < 60:
+        return {
+            "success": False,
+            "error": (
+                "Invalid npub format. Must start with 'npub1' and be at "
+                "least 60 characters."
+            ),
+        }
+    if not proof:
+        return {"success": False, "error": "proof is required."}
+    from tollbooth.identity_proof import verify_proof
+
+    if not verify_proof(proof, npub, tool_name):
+        return {"success": False, "error": "Invalid operator proof."}
+    return None
+
+
 # ======================================================================
 # OperatorRuntime
 # ======================================================================
@@ -216,7 +254,17 @@ register_standard_tools(
 async def check_balance(
     npub: Annotated[str, Field(description="Nostr public key (npub1...). Defaults to operator identity if empty.")] = "", proof: str = "",
 ) -> dict[str, Any]:
-    """Check an operator's credit balance at the Authority."""
+    """Check an operator's credit balance at the Authority.
+
+    When an explicit ``npub`` is provided, requires a Schnorr proof of
+    ownership — without it, balances would be enumerable by anyone who
+    can read the community registry. When ``npub`` is empty, falls back
+    to the Authority's own operator identity and skips the proof check.
+    """
+    if npub:
+        err = _verify_operator_proof(npub, proof, "check_balance")
+        if err:
+            return err
     try:
         user_id = resolve_npub(npub)
     except ValueError:
@@ -536,15 +584,16 @@ async def register_operator(
     """Provision an operator in the Authority ledger.
 
     Creates a ledger entry so the operator can purchase credits and
-    certify purchase orders. Idempotent — safe to call again.
+    certify purchase orders. Idempotent — safe to call again. Requires
+    a Schnorr proof of npub ownership; the candidate operator should
+    call ``request_npub_proof`` + ``receive_npub_proof`` on this
+    Authority first, then pass the resulting token here.
 
     Next step: Call purchase_credits to fund your credit balance.
     """
-    if not npub.startswith("npub1") or len(npub) < 60:
-        return {
-            "success": False,
-            "error": "Invalid npub format. Must start with 'npub1' and be at least 60 characters.",
-        }
+    err = _verify_operator_proof(npub, proof, "register_operator")
+    if err:
+        return err
 
     cache = await runtime.ledger_cache()
     ledger = await cache.get(npub)
@@ -613,9 +662,15 @@ async def update_operator(
     service_url: Annotated[str, Field(description="New MCP endpoint URL (leave empty to keep current).")] = "",
     display_name: Annotated[str, Field(description="New display name (leave empty to keep current).")] = "",
 ) -> dict[str, Any]:
-    """Update an existing Operator's community registry entry."""
-    if not npub.startswith("npub1") or len(npub) < 60:
-        return {"success": False, "error": "Invalid npub format."}
+    """Update an existing Operator's community registry entry.
+
+    Requires a Schnorr proof of npub ownership — without it, an attacker
+    who knew a victim Operator's public npub could rewrite their
+    ``service_url`` to point at an attacker-controlled MCP endpoint.
+    """
+    err = _verify_operator_proof(npub, proof, "update_operator")
+    if err:
+        return err
     if not service_url and not display_name:
         return {"success": False, "error": "Nothing to update. Provide service_url and/or display_name."}
 
@@ -641,9 +696,15 @@ async def update_operator(
 async def deregister_operator(
     npub: Annotated[str, Field(description="Nostr npub of the Operator to deregister.")] = "", proof: str = "",
 ) -> dict[str, Any]:
-    """Remove an Operator from the DPYC community registry."""
-    if not npub.startswith("npub1") or len(npub) < 60:
-        return {"success": False, "error": "Invalid npub format."}
+    """Remove an Operator from the DPYC community registry.
+
+    Requires a Schnorr proof of npub ownership — without it, anyone who
+    knew a victim Operator's public npub could remove them from the
+    community registry under this Authority's signature.
+    """
+    err = _verify_operator_proof(npub, proof, "deregister_operator")
+    if err:
+        return err
 
     try:
         signer = _get_nostr_signer()
@@ -669,15 +730,9 @@ async def get_operator_config(
 
     Gated by Schnorr signature proving ownership of the requested npub.
     """
-    if not npub.startswith("npub1") or len(npub) < 60:
-        return {"success": False, "error": "Invalid npub format."}
-
-    if not proof:
-        return {"success": False, "error": "proof is required."}
-
-    from tollbooth.identity_proof import verify_proof
-    if not verify_proof(proof, npub, "get_operator_config"):
-        return {"success": False, "error": "Invalid operator proof."}
+    err = _verify_operator_proof(npub, proof, "get_operator_config")
+    if err:
+        return err
 
     try:
         vault = await runtime.vault()
@@ -706,7 +761,18 @@ async def get_operator_config(
 async def operator_status(
     npub: Annotated[str, Field(description="Nostr public key (npub1...). Defaults to operator identity if empty.")] = "", proof: str = "",
 ) -> dict[str, Any]:
-    """View registration status, balance summary, and the Authority's Nostr npub."""
+    """View registration status, balance summary, and the Authority's Nostr npub.
+
+    When an explicit ``npub`` is provided, requires a Schnorr proof of
+    ownership — without it, anyone could enumerate balances by walking
+    the community registry. When ``npub`` is empty, falls back to the
+    Authority's own operator identity and skips the proof check (self-
+    inspection is always allowed).
+    """
+    if npub:
+        err = _verify_operator_proof(npub, proof, "operator_status")
+        if err:
+            return err
     user_id = _resolve_npub_or_operator(npub)
     s = _get_settings()
     nostr_signer = _get_nostr_signer()
