@@ -13,6 +13,7 @@ from pydantic import Field
 from fastmcp import FastMCP
 
 from tollbooth.credential_templates import CredentialTemplate, FieldSpec
+from tollbooth.identity_proof import require_proof
 from tollbooth.runtime import OperatorRuntime, register_standard_tools, resolve_npub
 from tollbooth.slug_tools import make_slug_tool
 from tollbooth.tool_identity import (
@@ -163,42 +164,10 @@ def _get_settings() -> AuthoritySettings:
     return _settings
 
 
-def _verify_operator_proof(
-    npub: str, proof: str, tool_name: str
-) -> dict[str, Any] | None:
-    """Validate that the caller controls `npub` for the named tool.
-
-    Returns ``None`` when the proof verifies — the caller should proceed
-    with side effects. Returns a structured error dict otherwise; the
-    caller should return that dict immediately.
-
-    Checks three things, in order:
-      1. npub is well-formed (starts with ``npub1``, ≥ 60 chars).
-      2. proof token is non-empty.
-      3. proof verifies against npub for ``tool_name`` via the wheel's
-         ``verify_proof``. The tool-name binding prevents a proof issued
-         for one tool from being replayed against another.
-
-    Used by every Authority tool that mutates the community registry or
-    exposes per-operator financial data — register_operator,
-    update_operator, deregister_operator, get_operator_config, and
-    (for the explicit-npub form) operator_status / check_balance.
-    """
-    if not npub.startswith("npub1") or len(npub) < 60:
-        return {
-            "success": False,
-            "error": (
-                "Invalid npub format. Must start with 'npub1' and be at "
-                "least 60 characters."
-            ),
-        }
-    if not proof:
-        return {"success": False, "error": "proof is required."}
-    from tollbooth.identity_proof import verify_proof
-
-    if not verify_proof(proof, npub, tool_name):
-        return {"success": False, "error": "Invalid operator proof."}
-    return None
+# The Authority used to keep a local `_verify_operator_proof` helper
+# doing exactly what `tollbooth.identity_proof.require_proof` now does
+# in the wheel (as of v0.19.0). All 5 callers were converted to use
+# the wheel helper directly — DRY restored.
 
 
 # ======================================================================
@@ -248,36 +217,10 @@ register_standard_tools(
 )
 
 
-# Override check_balance to fall back to operator npub when empty.
-# The Authority's "patrons" are operators who may omit npub.
-# Pop the standard registration first so the override doesn't trigger
-# FastMCP's "Tool already exists" warning — last-write-wins semantics
-# make this safe; the pop just keeps the build log clean.
-mcp._tool_manager._tools.pop("authority_check_balance", None)
-
-
-@tool
-async def check_balance(
-    npub: Annotated[str, Field(description="Nostr public key (npub1...). Defaults to operator identity if empty.")] = "", proof: str = "",
-) -> dict[str, Any]:
-    """Check an operator's credit balance at the Authority.
-
-    When an explicit ``npub`` is provided, requires a Schnorr proof of
-    ownership — without it, balances would be enumerable by anyone who
-    can read the community registry. When ``npub`` is empty, falls back
-    to the Authority's own operator identity and skips the proof check.
-    """
-    if npub:
-        err = _verify_operator_proof(npub, proof, "check_balance")
-        if err:
-            return err
-    try:
-        user_id = resolve_npub(npub)
-    except ValueError:
-        user_id = runtime.operator_npub()
-    cache = await runtime.ledger_cache()
-    from tollbooth.tools.credits import check_balance_tool
-    return await check_balance_tool(cache, user_id)
+# The Authority used to override authority_check_balance with a local
+# proof-verifying + self-falling-back variant; both behaviors now live
+# in the wheel's standard check_balance (require_proof gate + required
+# npub). No override needed — and no FastMCP private-API pop needed.
 
 
 # ======================================================================
@@ -597,7 +540,7 @@ async def register_operator(
 
     Next step: Call purchase_credits to fund your credit balance.
     """
-    err = _verify_operator_proof(npub, proof, "register_operator")
+    err = require_proof(npub, proof, "register_operator")
     if err:
         return err
 
@@ -674,7 +617,7 @@ async def update_operator(
     who knew a victim Operator's public npub could rewrite their
     ``service_url`` to point at an attacker-controlled MCP endpoint.
     """
-    err = _verify_operator_proof(npub, proof, "update_operator")
+    err = require_proof(npub, proof, "update_operator")
     if err:
         return err
     if not service_url and not display_name:
@@ -708,7 +651,7 @@ async def deregister_operator(
     knew a victim Operator's public npub could remove them from the
     community registry under this Authority's signature.
     """
-    err = _verify_operator_proof(npub, proof, "deregister_operator")
+    err = require_proof(npub, proof, "deregister_operator")
     if err:
         return err
 
@@ -736,7 +679,7 @@ async def get_operator_config(
 
     Gated by Schnorr signature proving ownership of the requested npub.
     """
-    err = _verify_operator_proof(npub, proof, "get_operator_config")
+    err = require_proof(npub, proof, "get_operator_config")
     if err:
         return err
 
@@ -776,7 +719,7 @@ async def operator_status(
     inspection is always allowed).
     """
     if npub:
-        err = _verify_operator_proof(npub, proof, "operator_status")
+        err = require_proof(npub, proof, "operator_status")
         if err:
             return err
     user_id = _resolve_npub_or_operator(npub)

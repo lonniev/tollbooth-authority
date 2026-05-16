@@ -3,6 +3,26 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.0] — 2026-05-16
+
+### Changed — adopt tollbooth-dpyc v0.19.0, drop local proof helper
+
+- Pinned `tollbooth-dpyc[nostr]==0.19.0`. The wheel's standard
+  `authority_check_balance` now requires non-empty npub + proof and
+  verifies the proof via `tollbooth.identity_proof.require_proof`.
+- Deleted the local `_verify_operator_proof` helper. Its 5 callers
+  (`register_operator`, `update_operator`, `deregister_operator`,
+  `get_operator_config`, `operator_status`) now import `require_proof`
+  from the wheel — DRY restored.
+- Deleted the Authority's `check_balance` override. The wheel's
+  standard implementation now does what the override did (verify
+  proof, require explicit npub).
+- Deleted the `mcp._tool_manager._tools.pop(...)` workaround that
+  silenced the duplicate-registration warning. With no override
+  there is no duplicate.
+
+Net diff: ~50 lines removed, one import added.
+
 ## [0.6.7] — 2026-03-03
 
 - Release 0.6.7
