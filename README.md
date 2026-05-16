@@ -57,11 +57,9 @@ Certificates are Schnorr-signed Nostr events (NIP-33 parameterized replaceable e
 
 The Authority checks the [dpyc-community `members.json`](https://github.com/lonniev/dpyc-community/blob/main/members.json) registry at certification time. Operators must have `"status": "active"` in the registry. The registry is HTTP-cached with a configurable TTL. Design is fail-closed: if the registry is unreachable, certification is denied.
 
-### Automatic Upstream Certification
+### Upstream Topology Is Registry Metadata
 
-Non-Prime Authorities automatically certify upstream in real-time. When `certify_credits` is called and `upstream_authority_address` is configured, the Authority uses `AuthorityCertifier` (from tollbooth-dpyc) to obtain a signed certificate from its upstream Authority before issuing its own. The Prime Authority (root of the chain, `upstream_authority_address` empty) self-signs and skips the upstream call.
-
-A startup validator rejects any non-Prime configuration where `TAX_RATE_PERCENT < UPSTREAM_TAX_PERCENT` — a fee rate below the upstream rate would lose money on every certification.
+Parent Authority relationships live in the `dpyc-community` registry — each Authority's `upstream_authority_npub` points at its sponsor. Operator MCPs resolve their certifying Authority via `resolve_authority_service(operator_npub)` walking that registry chain; no per-Authority env var configures the upstream. The Authority's own `certify_credits` simply collects the ad valorem fee from its operator's pre-funded balance and signs the certificate — no per-transaction upstream call.
 
 ### Ad Valorem Pricing
 
@@ -168,7 +166,6 @@ BTCPay credentials are delivered via Secure Courier, not set as environment vari
 |----------|---------|---------|
 | `TOLLBOOTH_NOSTR_RELAYS` | Comma-separated relay URLs | built-in defaults |
 | `TOLLBOOTH_NOSTR_AUDIT_ENABLED` | Enable NIP-78 audit trail on vault writes | `false` |
-| `UPSTREAM_AUTHORITY_ADDRESS` | Upstream Authority MCP URL (empty for Prime Authority) | *(empty)* |
 | `CERTIFICATE_TTL_SECONDS` | How long a signed certificate remains valid | `600` (10 min) |
 | `DPYC_ENFORCE_MEMBERSHIP` | Enable registry enforcement at certification time | `true` |
 | `DPYC_REGISTRY_CACHE_TTL_SECONDS` | How long to cache the DPYC community registry | `300` |

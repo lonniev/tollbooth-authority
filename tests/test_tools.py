@@ -280,79 +280,13 @@ async def test_operator_status():
     assert result["nostr_certificate_enabled"] is True
     # No authority_public_key field anymore
     assert "authority_public_key" not in result
-    # Prime Authority — no upstream config surfaced
-    assert "upstream_authority_address" not in result
 
 
-@pytest.mark.asyncio
-async def test_operator_status_shows_upstream():
-    """operator_status surfaces upstream chain config when configured."""
-    import tollbooth_authority.server as srv
-
-    nostr_signer = _make_nostr_signer()
-    settings = _make_settings(
-        upstream_authority_address="upstream@btcpay.example.com",
-    )
-    ledger = UserLedger()
-    ledger.credit_deposit(1000, "test-seed")
-    ledger.debit("spend", 500)
-    cache = MagicMock(spec=LedgerCache)
-    cache.get = AsyncMock(return_value=ledger)
-    cache.health = MagicMock(return_value={"status": "ok"})
-
-    with (
-        patch.object(srv, "_get_settings", return_value=settings),
-        patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
-        patch.object(srv.runtime, "ledger_cache", new_callable=AsyncMock, return_value=cache),
-    ):
-        result = await srv.operator_status(npub=SAMPLE_NPUB)
-
-    assert result["upstream_authority_address"] == "upstream@btcpay.example.com"
-    assert "upstream_authority_address" in result
-
-
-# ---------------------------------------------------------------------------
-# Upstream auto-certification
-# ---------------------------------------------------------------------------
-
-
-# Per-transaction upstream certification tests removed — upstream economics
-# are tranche-based (elastic top-offs), not per-transaction calls.
-# The Authority certifies from its own authority; upstream topology is
-# informational metadata, not runtime behavior.
-
-
-# test_report_upstream_purchase_deprecated removed — tool deleted.
-
-
-@pytest.mark.asyncio
-async def test_operator_status_shows_upstream_auto_mode():
-    """Non-Prime Authority: operator_status shows upstream_supply_mode=auto."""
-    import tollbooth_authority.server as srv
-
-    nostr_signer = _make_nostr_signer()
-    settings = _make_settings(
-        upstream_authority_address="upstream@example.com",
-    )
-
-    operator_ledger = UserLedger()
-    operator_ledger.credit_deposit(1000, "test-seed")
-
-    cache = MagicMock(spec=LedgerCache)
-    cache.get = AsyncMock(return_value=operator_ledger)
-    cache.health = MagicMock(return_value={"status": "ok"})
-
-    with (
-        patch.object(srv, "_get_settings", return_value=settings),
-        patch.object(srv, "_get_nostr_signer", return_value=nostr_signer),
-        patch.object(srv.runtime, "ledger_cache", new_callable=AsyncMock, return_value=cache),
-    ):
-        result = await srv.operator_status(npub=SAMPLE_NPUB)
-
-    assert "upstream_authority_address" in result
-    # Old supply fields should not be present
-    assert "upstream_supply_sats" not in result
-    assert "upstream_supply_consumed_sats" not in result
+# Upstream Authority topology is registry metadata, not env-driven config.
+# The old upstream_authority_address env var and its operator_status
+# surfacing were removed. Parent relationships are discovered via
+# dpyc-community/members/authorities/{npub}.json upstream_authority_npub
+# at runtime by the wheel's resolve_authority_service.
 
 
 # ---------------------------------------------------------------------------

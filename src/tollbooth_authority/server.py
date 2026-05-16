@@ -797,8 +797,6 @@ async def operator_status(
         "nostr_certificate_enabled": True,
     }
 
-    if s.upstream_authority_address:
-        result["upstream_authority_address"] = s.upstream_authority_address
     if s.dpyc_enforce_membership:
         result["dpyc_registry_enforcement"] = True
 

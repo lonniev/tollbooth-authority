@@ -13,10 +13,6 @@ class AuthoritySettings(BaseSettings):
     thebrain_vault_brain_id: str = ""
     thebrain_vault_home_id: str = ""
 
-    # Upstream Authority chain
-    # Empty = Prime Authority (self-sourced supply).
-    upstream_authority_address: str = ""
-
     # Certificate TTL
     certificate_ttl_seconds: int = 600
 
