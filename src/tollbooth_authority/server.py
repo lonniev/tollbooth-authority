@@ -250,6 +250,12 @@ register_standard_tools(
 
 # Override check_balance to fall back to operator npub when empty.
 # The Authority's "patrons" are operators who may omit npub.
+# Pop the standard registration first so the override doesn't trigger
+# FastMCP's "Tool already exists" warning — last-write-wins semantics
+# make this safe; the pop just keeps the build log clean.
+mcp._tool_manager._tools.pop("authority_check_balance", None)
+
+
 @tool
 async def check_balance(
     npub: Annotated[str, Field(description="Nostr public key (npub1...). Defaults to operator identity if empty.")] = "", proof: str = "",
