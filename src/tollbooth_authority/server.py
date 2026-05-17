@@ -14,6 +14,7 @@ from fastmcp import FastMCP
 
 from tollbooth.credential_templates import CredentialTemplate, FieldSpec
 from tollbooth.identity_proof import require_proof
+from tollbooth.registry import resolve_my_parent_npub
 from tollbooth.runtime import OperatorRuntime, register_standard_tools, resolve_npub
 from tollbooth.slug_tools import make_slug_tool
 from tollbooth.tool_identity import (
@@ -450,20 +451,12 @@ async def _register_via_oracle(
         return str(result)
 
 
-async def _resolve_prime_npub() -> str:
-    s = _get_settings()
-    registry = DPYCRegistry(
-        url=DEFAULT_REGISTRY_URL,
-        cache_ttl_seconds=s.dpyc_registry_cache_ttl_seconds,
-    )
-    try:
-        members = await registry._fetch()
-        for m in members:
-            if m.get("role") == "prime_authority" and m.get("status") == "active":
-                return m["npub"]
-        raise ValueError("No active Prime Authority found in registry.")
-    finally:
-        await registry.close()
+# _resolve_prime_npub() was here. Replaced by the wheel's
+# tollbooth.registry.resolve_my_parent_npub which generalizes parent
+# resolution: instead of always escalating to Prime, an Authority's
+# onboarding flow now escalates to whichever upstream the registry
+# names for THIS Authority. For Lonnie-Authority and NorthAmerica the
+# parent IS Prime; for NewEngland it's NorthAmerica.
 
 
 async def _resolve_own_service_url() -> str:
@@ -928,7 +921,13 @@ async def confirm_authority_claim(
         Field(description="The Nostr npub of the candidate who replied to the DM challenge."),
     ],
 ) -> dict[str, Any]:
-    """Step 2/3 of Authority onboarding — verify candidate DM, escalate to Prime."""
+    """Step 2/3 of Authority onboarding — verify candidate DM, escalate to parent Authority.
+
+    The parent Authority is resolved from THIS Authority's own entry in
+    dpyc-community: whatever its ``upstream_authority_npub`` names. For
+    Lonnie-Authority and NorthAmerica that's Prime; for NewEngland it's
+    NorthAmerica; chain depth is transparent.
+    """
     challenge = _onboarding.get()
     if challenge is None:
         return {"success": False, "error": "No active onboarding. Call register_authority_npub first."}
@@ -944,17 +943,17 @@ async def confirm_authority_claim(
         return {"success": False, "error": f"No valid claim DM received: {exc}"}
 
     try:
-        prime_npub = await _resolve_prime_npub()
+        signer = _get_nostr_signer()
+        parent_npub = await resolve_my_parent_npub(signer.npub)
     except Exception as exc:
-        return {"success": False, "error": f"Failed to resolve Prime Authority: {exc}"}
+        return {"success": False, "error": f"Failed to resolve parent Authority: {exc}"}
 
     try:
-        _onboarding.promote_to_approval(prime_npub)
+        _onboarding.promote_to_approval(parent_npub)
     except ValueError as exc:
         return {"success": False, "error": str(exc)}
 
     try:
-        signer = _get_nostr_signer()
         exchange2 = _get_nostr_exchange()
         await exchange2.open_channel(
             "authority_approval",
@@ -963,20 +962,20 @@ async def confirm_authority_claim(
                 f"npub {signer.npub[:16]}... "
                 "Reply with: approval = @@@yes@@@ and the poison slug."
             ),
-            recipient_npub=prime_npub,
+            recipient_npub=parent_npub,
         )
     except Exception as exc:
-        return {"success": False, "error": f"Failed to send approval request to Prime: {exc}"}
+        return {"success": False, "error": f"Failed to send approval request to parent Authority: {exc}"}
 
     return {
         "success": True,
         "candidate_npub": candidate_npub,
         "phase": "approval",
-        "prime_npub": prime_npub,
+        "parent_npub": parent_npub,
         "message": (
             f"Candidate {candidate_npub[:16]}... verified. "
-            f"Approval request sent to Prime ({prime_npub[:16]}...). "
-            "Call check_authority_approval(candidate_npub) after Prime responds."
+            f"Approval request sent to parent Authority ({parent_npub[:16]}...). "
+            "Call check_authority_approval(candidate_npub) after parent responds."
         ),
     }
 
@@ -985,10 +984,10 @@ async def confirm_authority_claim(
 async def check_authority_approval(
     candidate_npub: Annotated[
         str,
-        Field(description="The Nostr npub of the candidate awaiting Prime approval."),
+        Field(description="The Nostr npub of the candidate awaiting parent Authority approval."),
     ],
 ) -> dict[str, Any]:
-    """Step 3/3 of Authority onboarding — check Prime approval, activate Authority."""
+    """Step 3/3 of Authority onboarding — check parent approval, activate Authority."""
     challenge = _onboarding.get()
     if challenge is None:
         return {"success": False, "error": "No active onboarding."}
@@ -997,15 +996,15 @@ async def check_authority_approval(
     if challenge.phase != "approval":
         return {"success": False, "error": f"Onboarding is in '{challenge.phase}' phase, not 'approval'."}
 
-    prime_npub = challenge.prime_npub
-    if not prime_npub:
-        return {"success": False, "error": "Prime Authority npub not set."}
+    parent_npub = challenge.parent_npub
+    if not parent_npub:
+        return {"success": False, "error": "Parent Authority npub not set."}
 
     try:
         exchange = _get_nostr_exchange()
-        await exchange.receive(sender_npub=prime_npub, service="authority_approval")
+        await exchange.receive(sender_npub=parent_npub, service="authority_approval")
     except Exception as exc:
-        return {"success": False, "error": f"No approval received from Prime: {exc}"}
+        return {"success": False, "error": f"No approval received from parent Authority: {exc}"}
 
     await _set_authority_npub(candidate_npub)
 
@@ -1016,7 +1015,7 @@ async def check_authority_approval(
             authority_npub=candidate_npub,
             display_name=f"Authority ({candidate_npub[:16]}...)",
             service_url=service_url,
-            upstream_authority_npub=prime_npub,
+            upstream_authority_npub=parent_npub,
         )
     except Exception as exc:
         logger.warning("Oracle registration failed (Authority still activated): %s", exc)

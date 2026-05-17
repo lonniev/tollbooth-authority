@@ -3,6 +3,28 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.0] — 2026-05-16
+
+### Changed — escalate onboarding to the registered parent, not always Prime
+
+`confirm_authority_claim` and `check_authority_approval` previously
+hardcoded Prime as the only approver via a local `_resolve_prime_npub`
+helper. Replaced with the wheel-side `resolve_my_parent_npub` (added
+in tollbooth-dpyc 0.20.0), which reads THIS Authority's own entry from
+dpyc-community and returns its `upstream_authority_npub`.
+
+For Lonnie-Authority the upstream IS Prime, so observable behavior is
+unchanged. The change matters for sub-Authorities like NewEngland
+whose registered upstream is NorthAmerica — their onboarding now
+escalates to NA, not Prime. Chain depth is transparent.
+
+Renamed `OnboardingChallenge.prime_npub` → `parent_npub` to reflect
+the generalized role (any registered Authority can be the approver).
+
+Pin bumped to `tollbooth-dpyc[nostr]==0.20.0`. Local
+`_resolve_prime_npub` helper deleted (~14 lines removed; the wheel
+helper subsumes it).
+
 ## [0.7.0] — 2026-05-16
 
 ### Changed — adopt tollbooth-dpyc v0.19.0, drop local proof helper

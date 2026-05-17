@@ -27,7 +27,7 @@ AUTHORITY_APPROVAL_TEMPLATE = CredentialTemplate(
     service="authority_approval",
     version=1,
     fields={"approval": FieldSpec(required=True, sensitive=False)},
-    description="Authority curator approval — Prime Authority approves the candidate",
+    description="Authority curator approval — parent Authority approves the candidate",
 )
 
 ONBOARDING_TEMPLATES: dict[str, CredentialTemplate] = {
@@ -48,7 +48,7 @@ class OnboardingChallenge:
 
     candidate_npub: str
     phase: str  # "claim" | "approval"
-    prime_npub: str | None = None  # set when promoting to approval
+    parent_npub: str | None = None  # registered approver (Prime, NA, etc.)
     created_at: float = field(default_factory=time.time)
     ttl_seconds: int = _DEFAULT_TTL_SECONDS
 
@@ -88,11 +88,11 @@ class OnboardingState:
         self._active = challenge
         return challenge
 
-    def promote_to_approval(self, prime_npub: str) -> OnboardingChallenge:
+    def promote_to_approval(self, parent_npub: str) -> OnboardingChallenge:
         """Promote the current claim to the approval phase.
 
-        Resets the TTL so Prime has a fresh window to respond.
-        Raises ``ValueError`` if no active claim or wrong phase.
+        Resets the TTL so the parent Authority has a fresh window to
+        respond. Raises ``ValueError`` if no active claim or wrong phase.
         """
         self._prune()
         if self._active is None:
@@ -102,7 +102,7 @@ class OnboardingState:
                 f"Cannot promote: current phase is '{self._active.phase}', expected 'claim'."
             )
         self._active.phase = "approval"
-        self._active.prime_npub = prime_npub
+        self._active.parent_npub = parent_npub
         self._active.created_at = time.time()  # fresh TTL
         return self._active
 
