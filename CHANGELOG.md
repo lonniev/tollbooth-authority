@@ -3,6 +3,42 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.0] — 2026-05-16
+
+### Changed — collapse to thin wheel consumer
+
+Adopts the `tollbooth.authority` mixin from tollbooth-dpyc 0.22.0.
+Every piece of generic Authority code that used to live in this repo
+now lives in the wheel:
+
+- `actor.py` — deleted (no external consumers; the protocol-conformance
+  helper is dropped)
+- `config.py` — deleted (AuthoritySettings is now in
+  `tollbooth.authority.settings`)
+- `nostr_signing.py` — deleted (in `tollbooth.authority.nostr_signing`)
+- `onboarding.py` — deleted (in `tollbooth.authority.onboarding`)
+- `registry.py` — deleted (was already a thin re-export of
+  `tollbooth.registry`)
+- `replay.py` — deleted (in `tollbooth.authority.replay`)
+- `role_migration.py` — deleted (in
+  `tollbooth.authority.role_migration` — invoke with `python -m
+  tollbooth.authority.role_migration`)
+- `tenant_provisioner.py` — deleted (in
+  `tollbooth.authority.tenant_provisioner`)
+
+`server.py` collapses from ~1000 lines of tool definitions and helpers
+to ~80 lines of actor-specific configuration: FastMCP instance name,
+human-readable instructions, OperatorRuntime construction, and the
+two `register_*_tools(mcp, runtime)` calls. The 10 Authority @tool
+definitions now live in `tollbooth.authority.tools` and are mounted by
+`register_authority_tools(mcp, runtime)`.
+
+Net diff: 8 module files deleted, server.py shrinks by ~900 lines.
+Behavior is identical — this is a pure restructuring.
+
+Pin bumped to `tollbooth-dpyc[nostr]==0.22.0`.
+
+
 ## [0.8.0] — 2026-05-16
 
 ### Changed — escalate onboarding to the registered parent, not always Prime
