@@ -25,9 +25,37 @@ The Authority's signature is the proof that the turnpike is legitimate. Without 
 
 ## Architecture
 
-Since v0.5.0, the Authority is built on `OperatorRuntime` from [tollbooth-dpyc](https://github.com/lonniev/tollbooth-dpyc) with `purchase_mode="direct"`. Architecturally it is a standard operator — a trust root that reads `NEON_DATABASE_URL` from the environment and does not require an upstream certificate. Standard tools (credits, payments, balance, statements, pricing, notarization) are delegated to the wheel's `register_standard_tools()`, leaving the Authority's `server.py` to define only its domain-specific tools.
+As of v0.9.0, this Authority is an ~80-line thin consumer of the [tollbooth-dpyc](https://github.com/lonniev/tollbooth-dpyc) wheel. Every piece of generic Authority code — onboarding state machine, Schnorr certificate signer, replay tracker, Neon tenant provisioner, and the full 10-tool MCP surface — lives in the wheel's `tollbooth.authority` package. This repo's `server.py` supplies only actor-specific configuration: identity name, human-readable instructions, OperatorRuntime construction, and two `register_*_tools(mcp, runtime)` calls.
 
-This refactor reduced the server module from approximately 1,900 lines to approximately 970 lines.
+```python
+# The entire server.py, distilled
+from fastmcp import FastMCP
+from tollbooth.authority import (
+    AUTHORITY_TOOL_REGISTRY,
+    OPERATOR_CREDENTIAL_TEMPLATE,
+    register_authority_tools,
+)
+from tollbooth.runtime import OperatorRuntime, register_standard_tools
+from tollbooth.tool_identity import STANDARD_IDENTITIES
+
+mcp = FastMCP("tollbooth-authority", instructions="…")
+runtime = OperatorRuntime(
+    tool_registry={**STANDARD_IDENTITIES, **AUTHORITY_TOOL_REGISTRY},
+    purchase_mode="direct",           # Authority is its own trust root
+    ots_enabled=True,
+    operator_credential_template=OPERATOR_CREDENTIAL_TEMPLATE,
+)
+register_standard_tools(mcp, "authority", runtime, ...)
+register_authority_tools(mcp, runtime)
+```
+
+Refactor history:
+
+- **v0.5.0** introduced `OperatorRuntime` and delegated standard tools to the wheel — ~1,900 lines → ~970.
+- **v0.19.0** required+verified proof on every tool that names it; the local `_verify_operator_proof` helper was promoted to wheel-side `tollbooth.identity_proof.require_proof`.
+- **v0.21.0** (wheel) promoted 6 supporting modules (onboarding, nostr_signing, replay, tenant_provisioner, role_migration, settings) from forked Authority code into `tollbooth.authority.*`.
+- **v0.22.0** (wheel) promoted the 10 Authority `@tool` definitions into `register_authority_tools(mcp, runtime)`.
+- **v0.9.0** (this release) deleted the eight now-redundant modules and slimmed server.py from ~970 lines to ~80. NorthAmerica and NewEngland followed suit in their own `0.4.0` releases.
 
 ### Three-Party Protocol
 
@@ -75,47 +103,12 @@ Every certificate includes a unique JTI (JWT ID). The Authority tracks seen JTIs
 
 ## MCP Tools
 
-### Domain Tools (defined in server.py)
+All tools are now wheel-defined and registered by the two `register_*_tools` calls in `server.py`. For the full canonical tables (Authority tools mounted by `register_authority_tools`, standard tools mounted by `register_standard_tools`) see the [`tollbooth-dpyc` README](https://github.com/lonniev/tollbooth-dpyc#authority-extension-tollboothauthority). The short version:
 
-| Tool | Purpose |
-|------|---------|
-| `register_operator` | Provision an operator in the Authority ledger. Creates a ledger entry, provisions an isolated Neon schema, and registers in the community registry via the Oracle. Idempotent. |
-| `update_operator` | Update an operator's community registry entry (service URL, display name). |
-| `deregister_operator` | Remove an operator from the DPYC community registry. |
-| `get_operator_config` | Retrieve operator bootstrap configuration (Neon URL, schema). Gated by Schnorr proof of npub ownership. |
-| `operator_status` | View registration status, balance summary, vault backend, and the Authority's Nostr npub. |
-| `certify_credits` | The core machine-to-machine tool. Deducts the 2% ad valorem fee and returns a Schnorr-signed Nostr event certificate (kind 30079). |
-| `check_dpyc_membership` | Free diagnostic. Looks up an npub in the DPYC community registry. |
-| `check_balance` | Check an operator's credit balance (overrides the standard tool to fall back to the operator's own npub). |
-| `register_authority_npub` | Step 1/3 of Authority onboarding — send a Nostr DM challenge to a curator candidate. |
-| `confirm_authority_claim` | Step 2/3 of Authority onboarding — verify candidate DM reply and escalate to Prime. |
-| `check_authority_approval` | Step 3/3 of Authority onboarding — check Prime approval and activate the Authority. |
+- **10 Authority tools** (Schnorr cert signing, operator lifecycle, 3-step Authority onboarding, registry membership check) — `register_authority_tools(mcp, runtime)`.
+- **~20 standard tools** (credit/payment, identity, secure courier, npub proof, pricing model, OpenTimestamps notarization, oracle delegation) — `register_standard_tools(mcp, "authority", runtime, ...)`.
 
-### Standard Tools (from tollbooth-dpyc wheel)
-
-The following tools are registered by `register_standard_tools()` and are not defined in Authority code:
-
-| Tool | Purpose |
-|------|---------|
-| `purchase_credits` | Create a Lightning invoice to pre-fund credit balance. |
-| `check_payment` | Verify that a Lightning invoice has settled and credit the balance. |
-| `service_status` | Software versions for tollbooth-authority, tollbooth-dpyc, fastmcp, and Python. |
-| `account_statement` | Detailed ledger history. |
-| `account_statement_infographic` | Visual ledger summary. |
-| `get_pricing_model` | View the current pricing model. |
-| `set_pricing_model` | Update the pricing model. |
-| `list_constraint_types` | List available constraint types for tool pricing. |
-| `notarize_ledger` | Create an OpenTimestamps notarization of ledger state. |
-| `get_notarization_proof` | Retrieve a notarization proof. |
-
-All tools that accept an `npub` parameter also accept a `proof: str` parameter for Schnorr signature verification of identity.
-
-### Deprecated Tools
-
-| Old Name | Replacement | Status |
-|----------|-------------|--------|
-| `activate_dpyc` | `register_operator(npub=...)` | Deprecated. Returns error directing callers to the new tool. |
-| `report_upstream_purchase` | *(automatic)* | Deprecated. Upstream certification is automatic via `AuthorityCertifier` inside `certify_credits`. |
+Every tool that accepts `npub` requires a non-empty `proof` parameter and verifies it via `tollbooth.identity_proof.require_proof` (wheel v0.19.0+). No exceptions, no fallbacks.
 
 ## Getting Started
 
