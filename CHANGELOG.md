@@ -3,6 +3,20 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.0] — 2026-05-19
+
+### Changed — sync with tollbooth-dpyc 0.25.0
+
+Picks up the wheel's runtime-name + DRY pass:
+
+- **Identity proofs sign the runtime tool name** (`authority_<capability>`)
+  — the bare capability seed never crosses the server boundary. (wheel 0.24.0)
+- **Oracle delegations mount under `authority_oracle_*`** — every wire-exposed
+  tool on this Authority now shares the same slug prefix. (wheel 0.24.1)
+- New `OperatorRuntime.require_caller_proof(...)` helper available on the
+  wheel; Authority tools picked it up via the bumped pin. (wheel 0.25.0)
+
+
 ## [0.9.0] — 2026-05-16
 
 ### Changed — collapse to thin wheel consumer
