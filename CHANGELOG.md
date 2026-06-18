@@ -3,6 +3,11 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+- chore: track tollbooth-dpyc through 0.45.4 — picks up the deferred-adoption courtship flow (`receive_adoption_request` / `list_adoption_requests` / `approve_adoption` / `reject_adoption`, where the Authority owner reviews and approves operator adoption requests) and `repair_operator_schema` (owner repair of a tenant's table ownership), plus the refund-on-raise correctness fix in 0.45.3 (`paid_tool` surfaces `ValueError` as `tool_input_invalid`). Pin is `tollbooth-dpyc[nostr]==0.45.4`. No wire-API changes in this repo.
+- docs: add the wider DPYC federation peer-repo table to README (includes newcomer cypher-mcp); replace "Honor Chain" with "Certification Chain".
+
 ## [0.10.1] — 2026-06-11
 - chore: track tollbooth-dpyc through 0.44.15 — SDK audit hardening (correctness fixes for credit-tranche expiration in 0.44.9 and proof-reply handling in 0.44.10; blocking mypy + coverage gates). No wire-API changes.
 

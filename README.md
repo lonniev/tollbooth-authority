@@ -67,6 +67,27 @@ The Tollbooth ecosystem is a three-party protocol spanning three repositories:
 | [tollbooth-dpyc](https://github.com/lonniev/tollbooth-dpyc) | The booth — operator-side credit ledger, BTCPay client, tool gating |
 | [thebrain-mcp](https://github.com/lonniev/thebrain-mcp) | The first city — reference MCP server powered by Tollbooth |
 
+### The Wider DPYC Federation
+
+The three-party protocol above is the core, but the Authority certifies a wider federation of independent MCP services, all built on the same `tollbooth-dpyc` SDK:
+
+| Repo | Role |
+|------|------|
+| [tollbooth-dpyc](https://github.com/lonniev/tollbooth-dpyc) | Shared SDK — crypto, vault, auth, pricing, audit |
+| [dpyc-community](https://github.com/lonniev/dpyc-community) | Governance registry — `members.json`, GOVERNANCE.md, CI validation |
+| [dpyc-oracle](https://github.com/lonniev/dpyc-oracle) | Free community concierge — membership, governance, onboarding answers |
+| [tollbooth-authority](https://github.com/lonniev/tollbooth-authority) | This repo — certification backbone, Schnorr certs, fee ledger |
+| [tollbooth-sample](https://github.com/lonniev/tollbooth-sample) | Reference template for new operators |
+| [tollbooth-pricing-studio](https://github.com/lonniev/tollbooth-pricing-studio) | Pricing editor — native iOS, Nostr DMs |
+| [cypher-mcp](https://github.com/lonniev/cypher-mcp) | Monetized graph answers — named Cypher over Neo4j/AuraDB |
+| [schwab-mcp](https://github.com/lonniev/schwab-mcp) | Charles Schwab brokerage data |
+| [thebrain-mcp](https://github.com/lonniev/thebrain-mcp) | TheBrain knowledge-graph access |
+| [excalibur-mcp](https://github.com/lonniev/excalibur-mcp) | X/Twitter posting |
+| [taxsort-mcp](https://github.com/lonniev/taxsort-mcp) | Tax sorting + classification |
+| [optionality-mcp](https://github.com/lonniev/optionality-mcp) | Options analytics |
+| [tollbooth-oauth2-collector](https://github.com/lonniev/tollbooth-oauth2-collector) | Shared OAuth2 callback collector (community Advocate) |
+| [tollbooth-shortlinks](https://github.com/lonniev/tollbooth-shortlinks) | URL shortener utility |
+
 ### How It Works
 
 1. **Register.** An operator connects to the Authority via [Horizon MCP](https://www.fastmcp.cloud/) and calls `register_operator(npub=...)`. The Authority creates a ledger entry and provisions an isolated Neon schema for the operator.
@@ -105,7 +126,7 @@ Every certificate includes a unique JTI (JWT ID). The Authority tracks seen JTIs
 
 All tools are now wheel-defined and registered by the two `register_*_tools` calls in `server.py`. For the full canonical tables (Authority tools mounted by `register_authority_tools`, standard tools mounted by `register_standard_tools`) see the [`tollbooth-dpyc` README](https://github.com/lonniev/tollbooth-dpyc#authority-extension-tollboothauthority). The short version:
 
-- **10 Authority tools** (Schnorr cert signing, operator lifecycle, 3-step Authority onboarding, registry membership check) — `register_authority_tools(mcp, runtime)`.
+- **Authority tools** (Schnorr cert signing, operator lifecycle, 3-step Authority onboarding, registry membership check) — `register_authority_tools(mcp, runtime)`. This set also includes the owner-side **deferred-adoption courtship** flow added in tollbooth-dpyc 0.45.x — `receive_adoption_request`, `list_adoption_requests`, `approve_adoption`, and `reject_adoption` (an operator requests adoption; the Authority owner reviews and approves or rejects) — plus `repair_operator_schema` (owner repair of a tenant's table ownership).
 - **~20 standard tools** (credit/payment, identity, secure courier, npub proof, pricing model, OpenTimestamps notarization, oracle delegation) — `register_standard_tools(mcp, "authority", runtime, ...)`.
 
 Every tool that accepts `npub` requires a non-empty `proof` parameter and verifies it via `tollbooth.identity_proof.require_proof` (wheel v0.19.0+). No exceptions, no fallbacks.
@@ -188,7 +209,7 @@ The Authority signs certificates with a Nostr nsec/npub keypair. Generate one us
 
 ### DPYC Identity (Nostr npub)
 
-Each Authority has a Nostr keypair that identifies it on the DPYC Honor Chain:
+Each Authority has a Nostr keypair that identifies it on the DPYC Certification Chain:
 
 ```bash
 pip install nostr-sdk
