@@ -5,7 +5,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- chore: track tollbooth-dpyc through 0.45.4 — picks up the deferred-adoption courtship flow (`receive_adoption_request` / `list_adoption_requests` / `approve_adoption` / `reject_adoption`, where the Authority owner reviews and approves operator adoption requests) and `repair_operator_schema` (owner repair of a tenant's table ownership), plus the refund-on-raise correctness fix in 0.45.3 (`paid_tool` surfaces `ValueError` as `tool_input_invalid`). Pin is `tollbooth-dpyc[nostr]==0.45.4`. No wire-API changes in this repo.
+- **chore: track tollbooth-dpyc through 0.49.0 — REQUIRED for the operator bootstrap NIP-33 switchover.** 0.49.0 publishes each operator's bootstrap config as a NIP-33 parameterized-replaceable event (kind 30078) instead of a kind-4 DM, so it no longer ages off relays. This is a **cold switchover with no fallback**: an operator on ≥0.49.0 reads *only* kind-30078, so the Authority MUST be on ≥0.49.0 to publish a readable config. After deploy, re-run `get_operator_config`/`register_operator` per operator to republish each config as the replaceable event. Pin is `tollbooth-dpyc[nostr]==0.49.0`. (Also carried since 0.45.4: deferred-adoption courtship flow, `repair_operator_schema`, the 0.45.3 refund-on-raise fix, and the 0.47.0 Authority-out-of-credits dunning.) No wire-API changes in this repo.
 - docs: add the wider DPYC federation peer-repo table to README (includes newcomer cypher-mcp); replace "Honor Chain" with "Certification Chain".
 
 ## [0.10.1] — 2026-06-11
