@@ -1,29 +1,7 @@
 """Tollbooth Authority — Certified Purchase Order Service."""
 
-from importlib.metadata import PackageNotFoundError, version as _pkg_version
+from tollbooth.version import resolve_service_version
 
-
-def _resolve_version() -> str:
-    """Single source of truth: pyproject [project].version. Installed metadata
-    first, with a from-source pyproject.toml fallback for deploys that run the
-    checkout without installing it."""
-    try:
-        return _pkg_version("tollbooth-authority")
-    except PackageNotFoundError:
-        pass
-    try:
-        import tomllib
-        from pathlib import Path
-        for parent in Path(__file__).resolve().parents:
-            pp = parent / "pyproject.toml"
-            if pp.is_file():
-                with pp.open("rb") as fh:
-                    return tomllib.load(fh)["project"]["version"]
-    except Exception:
-        pass
-    return "0.0.0"
-
-
-__version__ = _resolve_version()
+__version__ = resolve_service_version("tollbooth-authority", __file__)
 
 __all__ = ["__version__"]
