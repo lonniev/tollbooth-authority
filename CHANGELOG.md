@@ -5,6 +5,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-06-29
+- chore: track tollbooth-dpyc **0.57.0** — the SDK unifies the Secure Courier possession token under one name `dpop_token` (retiring `proof`/`proof_token`/`poison`). The Authority's own tools take no caller `proof` param (proof handling lives in the wheel's `authority/tools.py`, renamed there), so this is a pin bump + uv.lock regen with no wire-API change to this server. Also picks up the wheel's free `patron_auth` probe on `service_status` and the proof-vs-credential flow cross-references.
+
 ## [0.10.2] — 2026-06-22
 
 ### Changed — consume SDK 0.52.0 (vault_source/purchase_mode decoupling)
