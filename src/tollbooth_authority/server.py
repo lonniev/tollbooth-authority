@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 
 from fastmcp import FastMCP
-
 from tollbooth.authority import (
     AUTHORITY_TOOL_REGISTRY,
     OPERATOR_CREDENTIAL_TEMPLATE,
