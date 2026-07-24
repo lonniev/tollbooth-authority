@@ -12,7 +12,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-
 from tollbooth.vaults import TheBrainVault
 
 

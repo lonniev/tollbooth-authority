@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import re
 
-
 from tollbooth.infographic import (
-    render_account_infographic,
-    THEME_AUTHORITY,
     AUTHORITY_METRICS,
     AUTHORITY_SECTIONS,
+    THEME_AUTHORITY,
+    render_account_infographic,
 )
 
 
