@@ -41,7 +41,9 @@ from tollbooth.tool_identity import STANDARD_IDENTITIES
 mcp = FastMCP("tollbooth-authority", instructions="…")
 runtime = OperatorRuntime(
     tool_registry={**STANDARD_IDENTITIES, **AUTHORITY_TOOL_REGISTRY},
-    purchase_mode="direct",           # Authority is its own trust root
+    vault_source="env",               # Authority arrives with its own Neon
+    purchase_mode="auto",             # derive direct/certified from the registry chain
+    service_name="Tollbooth Authority",
     ots_enabled=True,
     operator_credential_template=OPERATOR_CREDENTIAL_TEMPLATE,
 )
@@ -135,7 +137,7 @@ Every tool that accepts `npub` requires a non-empty `proof` parameter and verifi
 
 ### Connecting via Horizon MCP
 
-The Authority runs on [FastMCP Cloud](https://www.fastmcp.cloud/). Any MCP client (Claude Desktop, Cursor, your own agent) can connect via Horizon:
+The Authority runs on [Horizon](https://www.fastmcp.cloud/). Any MCP client (Claude Desktop, Cursor, your own agent) can connect via Horizon:
 
 ```
 https://www.fastmcp.cloud/server/lonniev/tollbooth-authority
