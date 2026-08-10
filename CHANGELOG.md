@@ -3,6 +3,32 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.11.3 — 2026-08-10
+
+### Changed — track tollbooth-dpyc 0.85.0
+
+Picks up two fixes from the SDK that were invisible from here. `check_authority_balance`
+signed its proof for one tool name while calling another, so it failed for every operator
+that ever asked what its certification balance was. And a param schema's declared `default`
+was only honoured on one of the two routes into a dynamic tool, so an omitted optional
+parameter could reach a backend unbound and fail with nothing a caller could act on.
+
+No wire-API change to this server. Pin bump plus lock regeneration.
+
+### Changed — CI runs the check the deploy runs
+
+`ci.yml` now inspects the deploy entrypoint, which is exactly what Horizon does at build
+time. A suite that never imports the entrypoint cannot fail for the reason a build fails:
+optionality-mcp sat four days and eighteen commits without deploying, every build dying on
+an `AttributeError` at import, while its tests stayed green and fifteen "fix the deploy"
+PRs merged against a module that could not be loaded. Enforced fleet-wide by the doctrine
+linter, scoped by behaviour so a repo cannot escape it by renaming the file.
+
+`release.yml` extracted its notes with a pattern matching only the bracketed `## [1.2.3]`
+heading, while this CHANGELOG uses `## 1.2.3 — date`. It matched nothing and fell back to
+publishing a 16-byte "Release X.Y.Z" body, so none of this prose ever reached the release
+page. Extraction now accepts either style.
+
 ## 0.11.2 — 2026-07-16
 
 ### Changed — track tollbooth-dpyc 0.63.3
