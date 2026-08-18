@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.11.4 — 2026-08-17
+
+### Changed — track tollbooth-dpyc 0.86.0 (GitHub-free bootstrap)
+
+Picks up the GitHub-free operator bootstrap: relays and Authority resolution now come from the Oracle via MCP, so this operator no longer reads the dpyc-community registry on GitHub — closing the fleet-wide bootstrap SPOF.
+
 ## 0.11.3 — 2026-08-10
 
 ### Changed — track tollbooth-dpyc 0.85.0
