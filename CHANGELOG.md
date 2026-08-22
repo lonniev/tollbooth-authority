@@ -43,6 +43,15 @@ page. Extraction now accepts either style.
 
 ## [Unreleased]
 
+## [0.11.6] — 2026-08-22
+
+### Changed — track tollbooth-dpyc 0.87.2
+
+An object argument a client serialised as a JSON string is now parsed
+rather than refused as `dict_type`. Fixes `update_post` rejecting a
+large patch and `update_design_text` rejecting a multi-key edits
+object.
+
 ## [0.11.5] — 2026-08-22
 
 ### Changed — track tollbooth-dpyc 0.87.1
