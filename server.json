@@ -1,8 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.lonniev/tollbooth-authority",
-  "description": "Tollbooth Authority — Certified Purchase Order Service for DPYC operators",
-  "version": "0.11.4",
+  "description": "Tollbooth Authority \u2014 Certified Purchase Order Service for DPYC operators",
+  "version": "0.11.5",
   "repository": {
     "url": "https://github.com/lonniev/tollbooth-authority",
     "source": "github"
