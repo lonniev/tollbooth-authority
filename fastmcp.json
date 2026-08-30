@@ -1,6 +1,13 @@
 {
   "name": "Tollbooth Authority",
-  "server": "src/tollbooth_authority/server.py",
+  "source": {
+    "path": "src/tollbooth_authority/server.py",
+    "entrypoint": "mcp"
+  },
+  "environment": {
+    "type": "uv",
+    "project": "."
+  },
   "deployment": {
     "env": {
       "BTCPAY_HOST": "${BTCPAY_HOST}",

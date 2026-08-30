@@ -55,25 +55,53 @@ jobs:
             exit 1
 
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+      - uses: astral-sh/setup-uv@v10.0.0
 
-      - name: Install ruff
-        run: pip install ruff
+      # `uv sync --locked` is how Horizon installs: fastmcp's UVEnvironment.prepare()
+      # shells out to `uv sync`, and build_command() prefixes `uv run`. Installing with
+      # pip here meant CI validated a resolution the deploy never used — and `--locked`
+      # additionally fails on a stale lock, so drift is a pre-merge error instead of a
+      # deploy-time surprise.
+      - name: Install dependencies (the lockfile Horizon deploys)
+        run: uv sync --locked --extra dev
 
       - name: Lint
-        run: ruff check .
+        run: uv run ruff check .
 
       - name: Run tests
-        run: pytest tests/ -q
+        run: uv run pytest tests/ -q
 
       - name: Entrypoint inspects (the check Horizon performs at build time)
         run: |
           [ -f fastmcp.json ] || { echo "no fastmcp.json — not a FastMCP deployment; skipping"; exit 0; }
-          ENTRY=$(python -c "import json;print(json.load(open('fastmcp.json'))['server'])")
-          case "$ENTRY" in *:*) TARGET="$ENTRY";; *) TARGET="$ENTRY:mcp";; esac
+          # Resolve the entrypoint through fastmcp's OWN config model, not by hand.
+          # This read json['server'] — a key not in the schema at all — so it mirrored
+          # a format the platform had stopped accepting and could not fail for the real
+          # reason. Parsing with MCPServerConfig validates the file as a side effect.
+          # Not every repo in the fleet installs with uv — most use `pip install -e`.
+          # Hard-coding `uv run` made this guard fail with `uv: command not found`
+          # on all of them, which is the same mistake in a new costume: a check
+          # that cannot run is not a check.
+          if command -v uv >/dev/null 2>&1 && [ -f uv.lock ]; then PY="uv run python"; else PY="python"; fi
+          TARGET=$($PY -c "
+          import json
+          from fastmcp.utilities.mcp_server_config import MCPServerConfig
+          c = MCPServerConfig.model_validate(json.load(open('fastmcp.json')))
+          print(f'{c.source.path}:{c.source.entrypoint or \"mcp\"}')
+          ")
+          # The environment block is what makes the builder install this project.
+          # Without it UVEnvironment.project is None, nothing installs, and the build
+          # dies on a preflight import blaming your dependency list.
+          $PY -c "
+          import json, sys
+          from fastmcp.utilities.mcp_server_config import MCPServerConfig
+          c = MCPServerConfig.model_validate(json.load(open('fastmcp.json')))
+          e = c.environment
+          if not (e.project or e.dependencies or e.requirements):
+              sys.exit('fastmcp.json declares no environment source '
+                       '(project/dependencies/requirements) — the builder would install nothing.')
+          print('environment installs:', e.project or e.requirements or e.dependencies)
+          "
           echo "inspecting $TARGET"
           if [ -f uv.lock ] && command -v uv >/dev/null 2>&1; then
             uv run fastmcp inspect -f fastmcp -o /tmp/server-info.json "$TARGET"
