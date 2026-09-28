@@ -56,8 +56,8 @@ async def test_store_ledger_creates_parent_and_child(vault: TheBrainVault):
         {"id": "child-1"},   # daily child
     ])
 
-    result = await vault.store_ledger("op-1", '{"balance": 500}')
-    assert result == "child-1"
+    result = await vault.store_ledger("op-1", '{"balance": 500}', None)
+    assert result == 1  # the single-writer version counter
     assert vault._register_member.call_count == 1
 
 
@@ -69,8 +69,8 @@ async def test_store_ledger_existing_user_reuses_parent(vault: TheBrainVault):
     vault._create_thought = AsyncMock(return_value={"id": "child-1"})
     vault._set_note = AsyncMock()
 
-    result = await vault.store_ledger("op-1", '{"balance": 500}')
-    assert result == "child-1"
+    result = await vault.store_ledger("op-1", '{"balance": 500}', None)
+    assert result == 1  # the single-writer version counter
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +97,7 @@ async def test_fetch_ledger_reads_most_recent_child(vault: TheBrainVault):
     vault._get_note = AsyncMock(return_value='{"balance": 300}')
 
     result = await vault.fetch_ledger("op-1")
-    assert result == '{"balance": 300}'
+    assert result == ('{"balance": 300}', 0)
     # Should read the most recent child (day-2)
     vault._get_note.assert_called_with("day-2")
 
