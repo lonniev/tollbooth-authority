@@ -3,6 +3,8 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+Changes not yet released live in `changelog.d/`, one file per change — see the README there for why, and `scripts/changelog.py` for what folds them in at release time.
+
 ## 0.11.9 — 2026-08-24
 
 ### Security — track tollbooth-dpyc 0.88.1 (cryptography floor raised to >=49.0.0)
@@ -80,8 +82,6 @@ page. Extraction now accepts either style.
 ### Changed — track tollbooth-dpyc 0.63.3
 
 - Bumped the pinned SDK to 0.63.3 (npub-proof challenge DM now stamps the request time). Also cuts a release for changes accumulated since the last tag.
-
-## [Unreleased]
 
 ## [0.11.8] — 2026-08-22
 
@@ -684,4 +684,3 @@ Net diff: ~50 lines removed, one import added.
 - Add three-party protocol architecture diagram
 - Add Tollbooth Authority — Certified Purchase Order Service (#1)
 - Initial commit
-
