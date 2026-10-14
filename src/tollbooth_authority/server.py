@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 
 from fastmcp import FastMCP
+from mcp.types import Icon
 from tollbooth.authority import (
     AUTHORITY_TOOL_REGISTRY,
     OPERATOR_CREDENTIAL_TEMPLATE,
@@ -29,6 +30,9 @@ logger = logging.getLogger(__name__)
 
 mcp = FastMCP(
     "tollbooth-authority",
+    version=__version__,
+    website_url="https://github.com/lonniev/tollbooth-authority",
+    icons=[Icon(src="https://tollbooth-dpyc.com/dpyc-logo.png", mimeType="image/png")],
     instructions=(
         "Tollbooth Authority — Certified Purchase Order Service.\n\n"
         "The Authority is the institutional backbone of the Tollbooth ecosystem. "
