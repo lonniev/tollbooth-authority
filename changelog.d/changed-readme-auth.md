@@ -1,0 +1,1 @@
+- The README teaches adoption through the owner's request queue (`request_adoption` → `approve_operator_request`), updates as requests the owner approves, deregistration by either party, and identity on the connection; it no longer names `register_operator` or proof arguments.
