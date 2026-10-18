@@ -92,7 +92,7 @@ The three-party protocol above is the core, but the Authority certifies a wider 
 
 ### How It Works
 
-1. **Register.** An operator connects to the Authority via [Horizon MCP](https://www.fastmcp.cloud/) and calls `register_operator(npub=...)`. The Authority creates a ledger entry and provisions an isolated Neon schema for the operator.
+1. **Adopt.** An operator calls `request_adoption(authority_npub=..., service_url=..., display_name=...)` on its **own** MCP, signing the request with its nsec. Its service delivers the request to the Authority, which records it as pending and notifies its owner. The owner approves it with `approve_operator_request` (or turns it down with `reject_operator_request`); approval creates the operator's ledger entry, provisions its isolated Neon schema and registers it through the Oracle.
 
 2. **Fund.** The operator calls `purchase_credits` with the number of sats they want to pre-fund. The Authority returns a Lightning invoice from its own BTCPay Server. The operator pays. After settlement, `check_payment` credits the balance.
 
@@ -128,10 +128,10 @@ Every certificate includes a unique JTI (JWT ID). The Authority tracks seen JTIs
 
 All tools are now wheel-defined and registered by the two `register_*_tools` calls in `server.py`. For the full canonical tables (Authority tools mounted by `register_authority_tools`, standard tools mounted by `register_standard_tools`) see the [`tollbooth-dpyc` README](https://github.com/lonniev/tollbooth-dpyc#authority-extension-tollboothauthority). The short version:
 
-- **Authority tools** (Schnorr cert signing, operator lifecycle, 3-step Authority onboarding, registry membership check) — `register_authority_tools(mcp, runtime)`. This set also includes the owner-side **deferred-adoption courtship** flow added in tollbooth-dpyc 0.45.x — `receive_adoption_request`, `list_adoption_requests`, `approve_adoption`, and `reject_adoption` (an operator requests adoption; the Authority owner reviews and approves or rejects) — plus `repair_operator_schema` (owner repair of a tenant's table ownership).
+- **Authority tools** (Schnorr cert signing, operator lifecycle, 3-step Authority onboarding, registry membership check) — `register_authority_tools(mcp, runtime)`. This set also includes the owner's **request queue**: `receive_adoption_request` (where an operator's adoption request arrives), `list_operator_requests`, `approve_operator_request` and `reject_operator_request`. The queue holds two kinds of request, an adoption and an update to an operator's registry entry (`update_operator`, which the operator calls and the owner approves). `deregister_operator` needs no approval: either the operator (leaving) or the Authority's owner (disowning it) may call it alone. `repair_operator_schema` is the owner's repair of a tenant's table ownership.
 - **~20 standard tools** (credit/payment, identity, secure courier, npub proof, pricing model, OpenTimestamps notarization, oracle delegation) — `register_standard_tools(mcp, "authority", runtime, ...)`.
 
-Every tool that accepts `npub` requires a non-empty `proof` parameter and verifies it via `tollbooth.identity_proof.require_proof` (wheel v0.19.0+). No exceptions, no fallbacks.
+Every tool that takes `npub` requires the connection to prove it, and each request acts as exactly one npub. A request signed with that npub's nsec (NIP-98) proves it. A keyless client connects as an OAuth *holder* and proves the npub into its wallet once, with `request_npub_proof`, a reply to the DM, then `receive_npub_proof`. Owner-only tools require the request to prove the Authority's own npub. No proof travels in a tool argument.
 
 ## Getting Started
 
@@ -143,13 +143,13 @@ The Authority runs on [Horizon](https://www.fastmcp.cloud/). Any MCP client (Cla
 https://www.fastmcp.cloud/server/lonniev/tollbooth-authority
 ```
 
-Authentication is automatic — Horizon OAuth identifies you as an operator. No API keys to manage.
+Connecting needs no API key. A client holding a key signs each request with it (NIP-98). Any other client connects with OAuth as a holder, which acts as no npub until one is proven into it by a Nostr DM.
 
 ### First Connection Walkthrough
 
 Once connected, walk through the bootstrap in order:
 
-1. **`register_operator(npub="npub1...")`** — Creates your ledger entry and provisions a Neon schema. Returns your npub, balance, and Neon URL.
+1. **`request_adoption(authority_npub="npub1...", service_url="...")`** — call it on your **own** operator MCP, signed with your operator nsec. The Authority's owner approves it (`approve_operator_request`), which creates your ledger entry and provisions your Neon schema. Your operator's `adoption_status` reads `provisioned` once it is done.
 2. **`purchase_credits(amount_sats=1000)`** — Returns a Lightning invoice. Pay it with any Lightning wallet.
 3. **`check_payment(invoice_id="...")`** — Pass the invoice ID from step 2. Confirms settlement and credits your balance.
 4. **`check_balance`** — Verify your balance is funded.
@@ -188,7 +188,7 @@ BTCPay credentials are delivered via Secure Courier, not set as environment vari
 
 #### Per-Operator Schema Isolation
 
-Each registered operator receives an isolated Neon schema (`op_{hash}`) with a dedicated Postgres LOGIN role. The Authority schema (`authority`) holds the Authority's own ledger. Operator schemas are provisioned automatically by `register_operator` and access is enforced via role-based grants -- no cross-operator data access is possible.
+Each registered operator receives an isolated Neon schema (`op_{hash}`) with a dedicated Postgres LOGIN role. The Authority schema (`authority`) holds the Authority's own ledger. Operator schemas are provisioned automatically when the owner approves an adoption and access is enforced via role-based grants -- no cross-operator data access is possible.
 
 #### Deprecated Alternatives
 
