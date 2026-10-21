@@ -5,6 +5,30 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Changes not yet released live in `changelog.d/`, one file per change — see the README there for why, and `scripts/changelog.py` for what folds them in at release time.
 
+## [0.12.0] — 2026-10-21
+
+### Changed
+
+- Connections authenticate as holders (tollbooth-dpyc 0.101.1 holder bearer): connecting from Claude.ai is an Authorization Code flow with no login page, each npub proven through a connection stays with it, and tool calls pass only `npub`. Operators, Pricing Studio and other Authorities call it with `Bearer anonymous` and prove themselves in their arguments, as before.
+
+- Pins tollbooth-dpyc 0.100.0: every Authority tool carries a title, behaviour hints and a description on every parameter; the server reports its own version, website and icon.
+
+- Pins tollbooth-dpyc 0.102.0: a request signed with an npub's own key (NIP-98) acts as that npub with no grant.
+
+- Pins tollbooth-dpyc 0.102.1: a request signed with an npub's own key (NIP-98) acts as that npub with no grant.
+
+- The README teaches adoption through the owner's request queue (`request_adoption` → `approve_operator_request`), updates as requests the owner approves, deregistration by either party, and identity on the connection; it no longer names `register_operator` or proof arguments.
+
+- The README now matches the code: the registry link points at `members/read-only-lookup-cache.json`, the Authority's upstream is resolved through the Oracle's `resolve_authority_for`, unread env vars (`TOLLBOOTH_NOSTR_RELAYS`, `TOLLBOOTH_NOSTR_AUDIT_ENABLED`, legacy `THEBRAIN_*`) are gone, and the federation table lists goodearth, beesknees, roastify, ChartRemotely and tollbooth-web.
+
+- Dependencies refreshed to current releases (mcp/fastmcp 1.27.0/3.4.7 → 2.3.0/4.1.0; frontend minor/patch). No service stays on old transitive versions.
+
+- Pins tollbooth-dpyc 0.103.0: identity rides on the connection only; the owner's queue holds operator adoption and update requests.
+
+### Fixed
+
+- The server instructions teach the adoption flow: the operator calls its own `request_adoption`, signed with its nsec, and the Authority's owner approves it. They no longer name the deleted `register_operator`.
+
 ## 0.11.9 — 2026-08-24
 
 ### Security — track tollbooth-dpyc 0.88.1 (cryptography floor raised to >=49.0.0)

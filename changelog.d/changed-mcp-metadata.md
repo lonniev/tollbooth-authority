@@ -1,1 +1,0 @@
-- Pins tollbooth-dpyc 0.100.0: every Authority tool carries a title, behaviour hints and a description on every parameter; the server reports its own version, website and icon.
