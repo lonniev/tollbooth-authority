@@ -1,1 +1,0 @@
-- The server instructions teach the adoption flow: the operator calls its own `request_adoption`, signed with its nsec, and the Authority's owner approves it. They no longer name the deleted `register_operator`.
