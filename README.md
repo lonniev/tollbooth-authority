@@ -25,7 +25,7 @@ The Authority's signature is the proof that the turnpike is legitimate. Without 
 
 ## Architecture
 
-As of v0.9.0, this Authority is an ~80-line thin consumer of the [tollbooth-dpyc](https://github.com/lonniev/tollbooth-dpyc) wheel. Every piece of generic Authority code — onboarding state machine, Schnorr certificate signer, replay tracker, Neon tenant provisioner, and the full 10-tool MCP surface — lives in the wheel's `tollbooth.authority` package. This repo's `server.py` supplies only actor-specific configuration: identity name, human-readable instructions, OperatorRuntime construction, and two `register_*_tools(mcp, runtime)` calls.
+As of v0.9.0, this Authority is a thin consumer of the [tollbooth-dpyc](https://github.com/lonniev/tollbooth-dpyc) wheel. Every piece of generic Authority code — onboarding state machine, Schnorr certificate signer, replay tracker, Neon tenant provisioner, and the full Authority tool surface — lives in the wheel's `tollbooth.authority` package. This repo's `server.py` supplies only actor-specific configuration: identity name, human-readable instructions, OperatorRuntime construction, and two `register_*_tools(mcp, runtime)` calls.
 
 ```python
 # The entire server.py, distilled
@@ -57,7 +57,7 @@ Refactor history:
 - **v0.19.0** required+verified proof on every tool that names it; the local `_verify_operator_proof` helper was promoted to wheel-side `tollbooth.identity_proof.require_proof`.
 - **v0.21.0** (wheel) promoted 6 supporting modules (onboarding, nostr_signing, replay, tenant_provisioner, role_migration, settings) from forked Authority code into `tollbooth.authority.*`.
 - **v0.22.0** (wheel) promoted the 10 Authority `@tool` definitions into `register_authority_tools(mcp, runtime)`.
-- **v0.9.0** (this release) deleted the eight now-redundant modules and slimmed server.py from ~970 lines to ~80. NorthAmerica and NewEngland followed suit in their own `0.4.0` releases.
+- **v0.9.0** (this release) deleted the eight now-redundant modules and slimmed server.py from ~970 lines to about a hundred. NorthAmerica and NewEngland followed suit in their own `0.4.0` releases.
 
 ### Three-Party Protocol
 
@@ -76,7 +76,7 @@ The three-party protocol above is the core, but the Authority certifies a wider 
 | Repo | Role |
 |------|------|
 | [tollbooth-dpyc](https://github.com/lonniev/tollbooth-dpyc) | Shared SDK — crypto, vault, auth, pricing, audit |
-| [dpyc-community](https://github.com/lonniev/dpyc-community) | Governance registry — `members.json`, GOVERNANCE.md, CI validation |
+| [dpyc-community](https://github.com/lonniev/dpyc-community) | Governance registry — `members/read-only-lookup-cache.json`, GOVERNANCE.md, CI validation |
 | [dpyc-oracle](https://github.com/lonniev/dpyc-oracle) | Free community concierge — membership, governance, onboarding answers |
 | [tollbooth-authority](https://github.com/lonniev/tollbooth-authority) | This repo — certification backbone, Schnorr certs, fee ledger |
 | [tollbooth-sample](https://github.com/lonniev/tollbooth-sample) | Reference template for new operators |
@@ -87,6 +87,11 @@ The three-party protocol above is the core, but the Authority certifies a wider 
 | [excalibur-mcp](https://github.com/lonniev/excalibur-mcp) | X/Twitter posting |
 | [taxsort-mcp](https://github.com/lonniev/taxsort-mcp) | Tax sorting + classification |
 | [optionality-mcp](https://github.com/lonniev/optionality-mcp) | Options analytics |
+| [goodearth-mcp](https://github.com/lonniev/goodearth-mcp) | Climate analytics for small farms |
+| [beesknees-mcp](https://github.com/lonniev/beesknees-mcp) | The Bee's Knees race game |
+| [roastify-mcp](https://github.com/lonniev/roastify-mcp) | Roastify coffee catalog + packaging artwork |
+| [ChartRemotely-mcp](https://github.com/lonniev/ChartRemotely-mcp) | Drives a desktop chart through a paired agent |
+| [tollbooth-web](https://github.com/lonniev/tollbooth-web) | Shared browser SDK for operator front ends |
 | [tollbooth-oauth2-collector](https://github.com/lonniev/tollbooth-oauth2-collector) | Shared OAuth2 callback collector (community Advocate) |
 | [tollbooth-shortlinks](https://github.com/lonniev/tollbooth-shortlinks) | URL shortener utility |
 
@@ -106,11 +111,11 @@ Certificates are Schnorr-signed Nostr events (NIP-33 parameterized replaceable e
 
 ### DPYC Registry Enforcement
 
-The Authority checks the [dpyc-community `members.json`](https://github.com/lonniev/dpyc-community/blob/main/members.json) registry at certification time. Operators must have `"status": "active"` in the registry. The registry is HTTP-cached with a configurable TTL. Design is fail-closed: if the registry is unreachable, certification is denied.
+The Authority checks the [dpyc-community registry cache `members/read-only-lookup-cache.json`](https://github.com/lonniev/dpyc-community/blob/main/members/read-only-lookup-cache.json) at certification time. Operators must have `"status": "active"` in the registry. The registry is HTTP-cached with a configurable TTL. Design is fail-closed: if the registry is unreachable, certification is denied.
 
 ### Upstream Topology Is Registry Metadata
 
-Parent Authority relationships live in the `dpyc-community` registry — each Authority's `upstream_authority_npub` points at its sponsor. Operator MCPs resolve their certifying Authority via `resolve_authority_service(operator_npub)` walking that registry chain; no per-Authority env var configures the upstream. The Authority's own `certify_credits` simply collects the ad valorem fee from its operator's pre-funded balance and signs the certificate — no per-transaction upstream call.
+Parent Authority relationships live in the `dpyc-community` registry — each Authority's `upstream_authority_npub` points at its sponsor. Operator MCPs resolve their certifying Authority through the Oracle (`resolve_authority_for(npub)`), which walks that registry chain; no per-Authority env var configures the upstream. The Authority's own `certify_credits` simply collects the ad valorem fee from its operator's pre-funded balance and signs the certificate — no per-transaction upstream call.
 
 ### Ad Valorem Pricing
 
@@ -129,7 +134,7 @@ Every certificate includes a unique JTI (JWT ID). The Authority tracks seen JTIs
 All tools are now wheel-defined and registered by the two `register_*_tools` calls in `server.py`. For the full canonical tables (Authority tools mounted by `register_authority_tools`, standard tools mounted by `register_standard_tools`) see the [`tollbooth-dpyc` README](https://github.com/lonniev/tollbooth-dpyc#authority-extension-tollboothauthority). The short version:
 
 - **Authority tools** (Schnorr cert signing, operator lifecycle, 3-step Authority onboarding, registry membership check) — `register_authority_tools(mcp, runtime)`. This set also includes the owner's **request queue**: `receive_adoption_request` (where an operator's adoption request arrives), `list_operator_requests`, `approve_operator_request` and `reject_operator_request`. The queue holds two kinds of request, an adoption and an update to an operator's registry entry (`update_operator`, which the operator calls and the owner approves). `deregister_operator` needs no approval: either the operator (leaving) or the Authority's owner (disowning it) may call it alone. `repair_operator_schema` is the owner's repair of a tenant's table ownership.
-- **~20 standard tools** (credit/payment, identity, secure courier, npub proof, pricing model, OpenTimestamps notarization, oracle delegation) — `register_standard_tools(mcp, "authority", runtime, ...)`.
+- **The standard tools** (credit/payment, identity, secure courier, npub proof, pricing model, OpenTimestamps notarization, oracle delegation) — `register_standard_tools(mcp, "authority", runtime, ...)`.
 
 Every tool that takes `npub` requires the connection to prove it, and each request acts as exactly one npub. A request signed with that npub's nsec (NIP-98) proves it. A keyless client connects as an OAuth *holder* and proves the npub into its wallet once, with `request_npub_proof`, a reply to the DM, then `receive_npub_proof`. Owner-only tools require the request to prove the Authority's own npub. No proof travels in a tool argument.
 
@@ -153,7 +158,7 @@ Once connected, walk through the bootstrap in order:
 2. **`purchase_credits(amount_sats=1000)`** — Returns a Lightning invoice. Pay it with any Lightning wallet.
 3. **`check_payment(invoice_id="...")`** — Pass the invoice ID from step 2. Confirms settlement and credits your balance.
 4. **`check_balance`** — Verify your balance is funded.
-5. **`operator_status`** — See your registration, balance, vault backend, and the Authority's public key (you'll hardcode this in your tollbooth-dpyc integration).
+5. **`operator_status`** — See your registration, balance, vault backend, and the Authority's npub. tollbooth-dpyc looks that npub up in the registry when it verifies a certificate, so there is nothing to hardcode.
 
 ### Self-Hosting
 
@@ -180,8 +185,6 @@ BTCPay credentials are delivered via Secure Courier, not set as environment vari
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `TOLLBOOTH_NOSTR_RELAYS` | Comma-separated relay URLs | built-in defaults |
-| `TOLLBOOTH_NOSTR_AUDIT_ENABLED` | Enable NIP-78 audit trail on vault writes | `false` |
 | `CERTIFICATE_TTL_SECONDS` | How long a signed certificate remains valid | `600` (10 min) |
 | `DPYC_ENFORCE_MEMBERSHIP` | Enable registry enforcement at certification time | `true` |
 | `DPYC_REGISTRY_CACHE_TTL_SECONDS` | How long to cache the DPYC community registry | `300` |
@@ -189,10 +192,6 @@ BTCPay credentials are delivered via Secure Courier, not set as environment vari
 #### Per-Operator Schema Isolation
 
 Each registered operator receives an isolated Neon schema (`op_{hash}`) with a dedicated Postgres LOGIN role. The Authority schema (`authority`) holds the Authority's own ledger. Operator schemas are provisioned automatically when the owner approves an adoption and access is enforced via role-based grants -- no cross-operator data access is possible.
-
-#### Deprecated Alternatives
-
-Legacy deployments may still use `THEBRAIN_API_KEY`, `THEBRAIN_BRAIN_ID`, and `THEBRAIN_VAULT_THOUGHT_ID` environment variables for TheBrain-based vault storage. These are superseded by NeonVault and will be removed in a future release.
 
 ## Development
 
