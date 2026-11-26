@@ -4,7 +4,7 @@
   "title": "Tollbooth Authority",
   "description": "Tollbooth Authority — Certified Purchase Order Service for DPYC operators",
   "websiteUrl": "https://cafe.tollbooth-dpyc.com/products/tollbooth-authority",
-  "version": "0.12.3",
+  "version": "0.12.4",
   "repository": {
     "url": "https://github.com/lonniev/tollbooth-authority",
     "source": "github"
