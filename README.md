@@ -221,6 +221,13 @@ python -c "from nostr_sdk import Keys; k = Keys.generate(); print(f'npub: {k.pub
 
 [The Phantom Tollbooth on the Lightning Turnpike](https://stablecoin.myshopify.com/blogs/our-value/the-phantom-tollbooth-on-the-lightning-turnpike) — the full story of how we're monetizing the monetization of AI APIs, and then fading to the background.
 
+<!-- dpyc-family -->
+## Part of Tollbooth DPYC™
+
+This service is one of the Tollbooth DPYC™ family of MCP servers.
+Browse them all in the [MCP catalog](https://cafe.tollbooth-dpyc.com/collections/mcps).
+The [DPYC Oracle](https://dpyc-oracle.fastmcp.app/mcp) lists the live network with its free `list_services` tool.
+
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE) for details.
